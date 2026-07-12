@@ -19,15 +19,20 @@ PAIKAT = {
     "Rovaniemi, (keskusta)":{"lat":66.5054,"lon":25.7285}
 }
 
-# FUNKTIO KUUN VAIHEEN SUOMENTAMISEKSI
+# FUNKTIO KUUN VAIHEEN SUOMENTAMISEKSI (Korjattu siirtymäikkunat)
 def suomenna_kuun_vaihe(val):
-    if val == 0 or val == 1: return "🌑 Uusikuu"
-    elif 0 < val < 0.25: return "🌒 Kasvava sirppi"
-    elif val == 0.25: return "🌓 Ensimmäinen neljännes"
-    elif 0.25 < val < 0.5: return "🌔 Kasvava puolikuu"
-    elif val == 0.5: return "🌕 Täysikuu"
-    elif 0.5 < val < 0.75: return "🌖 Vähenevä puolikuu"
-    elif val == 0.75: return "🌗 Viimeinen neljännes"
+    # Uusikuu (arvo lähellä 0 tai 1)
+    if val < 0.04 or val > 0.96: return "🌑 Uusikuu"
+    # Puolikuu / Ensimmäinen neljännes (arvo lähellä 0.25)
+    elif 0.21 <= val <= 0.29: return "🌓 Puolikuu (Kasvava)"
+    # Täysikuu (arvo lähellä 0.5)
+    elif 0.46 <= val <= 0.54: return "🌕 Täysikuu"
+    # Puolikuu / Viimeinen neljännes (arvo lähellä 0.75)
+    elif 0.71 <= val <= 0.79: return "🌗 Puolikuu (Vähenevä)"
+    # Välivaiheet
+    elif 0.04 <= val < 0.21: return "🌒 Kasvava sirppi"
+    elif 0.29 < val < 0.46: return "🌔 Kasvava puolikuu"
+    elif 0.54 < val < 0.71: return "🌖 Vähenevä puolikuu"
     else: return "🌘 Vähenevä sirppi"
 
 # MATEMAATTINEN FUNKTIO AURINGON NOUSU- JA LASKUAIKOJEN LASKEMISEEN POHJOISILLE ALUEILLE
@@ -277,7 +282,7 @@ if yr_json and om_json:
 
     # 6. AURINKO JA KUU -TAULUKKO (Täysin itsenäinen, toimii aina tulevaisuuteen!)
     st.markdown("---")
-    st.subheader("🌅 Auringon ja Kuun ajat reissupäiville")
+    st.subheader("🌅 Auringon nousu- ja laskuajat sekä kuun vaiheet")
     st.caption("Valitun ajanjakson valoisat ajat sekä kuun vaiheet yön kalastussuunnitelmia varten. (Lasketaan matemaattisesti, toimii mille tahansa päivälle).")
     
     # Luodaan lista valituista päivistä valitulla välillä lennosta
