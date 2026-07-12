@@ -269,22 +269,22 @@ if yr_json and om_json:
             st.write("**Lämpötilan kehitys**")
             st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Lämpötila", "Lämpötila", "°C"), use_container_width=True)
 
-        # HAALEAT VYÖHYKKEET TUULELLE
+        # DYNAAMISET VYÖHYKKEET TUULELLE (Ylin punainen laatikko ulottuu 50 m/s asti, jotta se skaalautuu aina mukana)
         taustavyohykkeet = pd.DataFrame([
             {"aloitus": 0, "lopetus": 9, "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
             {"aloitus": 9, "lopetus": 13, "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
-            {"aloitus": 13, "lopetus": 25, "Väri": "Erittäin kova tuuli (>13 m/s)"}
+            {"aloitus": 13, "lopetus": 50, "Väri": "Erittäin kova tuuli (>13 m/s)"}
         ])
         taustavari_kartta = alt.Chart(taustavyohykkeet).mark_rect(opacity=0.06).encode(
-            y=alt.Y('aloitus:Q', scale=alt.Scale(domain=[0, 20]), title="m/s"), y2='lopetus:Q',
+            y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(zero=True)), y2='lopetus:Q',
             color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
         )
 
-        # TUULIGRAAFIT
+        # TUULIGRAAFIT (Poistettu kiinteä domain=[0,20], eli nyt skaalautuu täysin maksimituulen mukaan)
         st.write("**💨 Keskituulen nopeus**")
         keski_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
-            y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(domain=[0, 20])),
+            y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(zero=True)),
             color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
             strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q")]
         ).properties(height=260).interactive(bind_y=False)
@@ -293,7 +293,7 @@ if yr_json and om_json:
         st.write("**🌪️ Tuulen puuskat**")
         puuska_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
-            y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(domain=[0, 20])),
+            y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(zero=True)),
             color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
             strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuulen puuska:Q")]
         ).properties(height=260).interactive(bind_y=False)
