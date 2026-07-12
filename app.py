@@ -187,7 +187,6 @@ if yr_json and om_json:
         tuuli_varoitus = "Normaali" if puuska_t < 9 else ("⚠️ Puuskainen" if puuska_t < 13 else "❌ ERITTÄIN KOVA TUULI")
         c3.metric("Tuuli (Puuska)", f"{keski_t:.1f} ({puuska_t:.1f}) m/s", tuuli_varoitus, delta_color="inverse" if puuska_t >= 9 else "normal")
 
-        # MOBIILITIIVISTELMÄ TUULESTA (Poistettu kanoottiviittaukset)
         kovat_tuulet = df_yr_tuleva[df_yr_tuleva["Tuulen puuska"] >= 9.0].head(5)
         if not kovat_tuulet.empty:
             with st.expander("⚠️ **Mobiilivaroitus: Tulevat kovat tuulipuuskat (yli 9 m/s)**"):
@@ -220,7 +219,6 @@ if yr_json and om_json:
             horizontal=True
         )
 
-    # Suodatetaan data valinnan mukaan
     if valittu_malli == "Vain Yr.no":
         df_suodatettu = df_suodatettu_pohja[df_suodatettu_pohja["Malli"].isin(["Toteutunut", "Yr.no Ennuste"])]
     elif valittu_malli == "Vain Open-Meteo":
@@ -233,7 +231,7 @@ if yr_json and om_json:
     else:
         st.subheader(f"📊 Sääkuvaajat: {valittu_paikka}")
         
-        # Apufunktio siistien graafien piirtoon ilman mobiilijumiutumista
+        # Apufunktio siistien graafien piirtoon parannetulla korkeudella (300px)
         def luo_erotettu_graafi(data, y_sarake, otsikko, yksikko):
             chart = alt.Chart(data).mark_line(strokeWidth=2).encode(
                 x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -244,10 +242,10 @@ if yr_json and om_json:
                 )),
                 strokeDash=alt.StrokeDash("Malli:N", sort=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"]),
                 tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip(f"{y_sarake}:Q"), alt.Tooltip("Malli:N")]
-            ).properties(height=200).interactive(bind_y=False)
+            ).properties(height=300).interactive(bind_y=False)
             return chart
 
-        # TOTEUTETAAN JOKO YHDISTETTY TAI ERILLISET KUVAAT
+        # LÄMPÖ & PAINE
         if yhdistamisen_tila == "Yhdistä Lämpö & Paine":
             st.write("**Ilmanpaineen ja Lämpötilan yhteiskuvaaja**")
             pohja = alt.Chart(df_suodatettu).encode(x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)))
@@ -262,7 +260,7 @@ if yr_json and om_json:
                 color=alt.Color("Malli:N"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q")]
             )
-            st.altair_chart(alt.layer(linja_paine, linja_lampo).resolve_scale(y='independent').properties(height=240).interactive(bind_y=False), use_container_width=True)
+            st.altair_chart(alt.layer(linja_paine, linja_lampo).resolve_scale(y='independent').properties(height=300).interactive(bind_y=False), use_container_width=True)
             st.caption("💡 Yhtenäinen viiva = Ilmanpaine (vasen akseli) | Katkoviiva = Lämpötila (oikea akseli)")
         else:
             st.write("**Ilmanpaineen kehitys**")
@@ -270,7 +268,7 @@ if yr_json and om_json:
             st.write("**Lämpötilan kehitys**")
             st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Lämpötila", "Lämpötila", "°C"), use_container_width=True)
 
-        # HAALEAT VYÖHYKKEET TUULELLE (Poistettu kanoottitekstit)
+        # HAALEAT VYÖHYKKEET TUULELLE
         taustavyohykkeet = pd.DataFrame([
             {"aloitus": 0, "lopetus": 9, "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
             {"aloitus": 9, "lopetus": 13, "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
@@ -281,13 +279,14 @@ if yr_json and om_json:
             color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
         )
 
+        # TUULIGRAAFIT (Korotettu 260px asti)
         st.write("**💨 Keskituulen nopeus**")
         keski_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
             y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(domain=[0, 20])),
             color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
             strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q")]
-        ).properties(height=180).interactive(bind_y=False)
+        ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(taustavari_kartta, keski_chart), use_container_width=True)
 
         st.write("**🌪️ Tuulen puuskat**")
@@ -296,16 +295,17 @@ if yr_json and om_json:
             y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(domain=[0, 20])),
             color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
             strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuulen puuska:Q")]
-        ).properties(height=180).interactive(bind_y=False)
+        ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(taustavari_kartta, puuska_chart), use_container_width=True)
 
+        # SADEMÄÄRÄ (Korotettu 200px asti)
         st.write("**🌧️ Sademäärä (mm/h) & Sadeprosentti**")
         sade_kuvaaja = alt.Chart(df_suodatettu).mark_bar(opacity=0.6).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
             y=alt.Y("Sademäärä:Q", title="Sademäärä (mm)", stack=None, scale=alt.Scale(type="sqrt")),
             color=alt.Color("Malli:N", title="Datalähde"),
             tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip("Sademäärä:Q", title="Sade (mm)"), alt.Tooltip("Sadetodennäköisyys:Q", title="Todennäköisyys (%)")]
-        ).properties(height=150).interactive(bind_y=False)
+        ).properties(height=200).interactive(bind_y=False)
         st.altair_chart(sade_kuvaaja, use_container_width=True)
 
     # 7. ASTROTAULUKKO
