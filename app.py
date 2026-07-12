@@ -14,7 +14,9 @@ DB_URI = st.secrets["db_uri"]
 # 1. MÄÄRITELLÄÄN KIINTEÄT SÄÄASEMAT / KALAPAIKAT
 PAIKAT = {
     "Miekak (Arjeplog)": {"lat": 66.7630, "lon": 17.2340},
-    "Inari (Juutuanjoki)": {"lat": 68.9050, "lon": 27.0080}
+    "Inari (Juutuanjoki)": {"lat": 68.9050, "lon": 27.0080},
+    "Päivärinne (Muhos)":{"lat":64.8842,"lon":25.8628},
+    "Rovaniemi, (keskusta)":{"lat":66.5054,"lon":25.7285}
 }
 
 # FUNKTIO KUUN VAIHEEN SUOMENTAMISEKSI
