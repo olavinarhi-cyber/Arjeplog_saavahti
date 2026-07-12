@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import altair as alt
 import psycopg2
+import math
 from datetime import datetime, date, timedelta
 from streamlit_folium import st_folium
 import folium
@@ -20,12 +21,55 @@ PAIKAT = {
 def suomenna_kuun_vaihe(val):
     if val == 0 or val == 1: return "🌑 Uusikuu"
     elif 0 < val < 0.25: return "🌒 Kasvava sirppi"
-    elif val == 0.25: return "🌓 Ensimmäinen neljännes (Puolikuu)"
+    elif val == 0.25: return "🌓 Ensimmäinen neljännes"
     elif 0.25 < val < 0.5: return "🌔 Kasvava puolikuu"
     elif val == 0.5: return "🌕 Täysikuu"
     elif 0.5 < val < 0.75: return "🌖 Vähenevä puolikuu"
-    elif val == 0.75: return "🌗 Viimeinen neljännes (Puolikuu)"
+    elif val == 0.75: return "🌗 Viimeinen neljännes"
     else: return "🌘 Vähenevä sirppi"
+
+# MATEMAATTINEN FUNKTIO AURINGON NOUSU- JA LASKUAIKOJEN LASKEMISEEN POHJOISILLE ALUEILLE
+def laske_aurinko_paiva(pvm, lat, lon):
+    # Lasketaan vuoden päivä (1-365)
+    fmt_pvm = datetime.combine(pvm, datetime.min.time())
+    paiva_vuodesta = fmt_pvm.timetuple().tm_yday
+    
+    # Auringon deklinaatio (likimääräinen kaava)
+    deklinaatio = 0.409 * math.sin(2 * math.pi * (paiva_vuodesta - 81) / 365)
+    
+    # Leveysaste radiaaneina
+    lat_rad = math.radians(lat)
+    
+    # Tuntikulma nousulle/laskulle
+    # -0.833 astetta on virallinen horisontin ylitys (auringon halkaisija + refraktio)
+    luku = (math.sin(math.radians(-0.833)) - math.sin(lat_rad) * math.sin(deklinaatio)) / (math.cos(lat_rad) * math.cos(deklinaatio))
+    
+    # Huomioidaan yötön yö tai kaamos pohjoisessa
+    if luku <= -1:
+        return "☀️ Yötön yö", "☀️ Ei laske"
+    elif luku >= 1:
+        return "🌑 Kaamos", "🌑 Ei nouse"
+        
+    tuntikulma = math.acos(luku)
+    
+    # Keskiaurinkoaika (likimääräinen keskipäivä klo 12 ilman aikayhtälöä)
+    keskipaiva = 12.0 - (lon / 15.0)
+    
+    # Nousu- ja laskuajat UTC-ajassa (tuntikulma muutettuna tunneiksi)
+    nousu_utc = keskipaiva - math.degrees(tuntikulma) / 15.0
+    lasku_utc = keskipaiva + math.degrees(tuntikulma) / 15.0
+    
+    # Siirretään Ruotsin/Suomen kesäaikaan (+3 Suomi, +2 Ruotsi)
+    # Automaattinen arvio kesäajalle heinäkuussa (+2 kohteesta riippuen)
+    aikakorjaus = 2.0 if lat < 67 else 3.0 # Karkea arvio Ruotsi vs Suomi aikavyöhykkeille
+    
+    nousu_tunnit = (nousu_utc + aikakorjaus) % 24
+    lasku_tunnit = (lasku_utc + aikakorjaus) % 24
+    
+    str_nousu = f"{int(nousu_tunnit):02d}:{int((nousu_tunnit%1)*60):02d}"
+    str_lasku = f"{int(lasku_tunnit):02d}:{int((lasku_tunnit%1)*60):02d}"
+    
+    return str_nousu, str_lasku
 
 # 2. PILVITIETOKANTAFUNKTIOT
 def tallenna_toteutunut_data(df_tunnit, paikka_nimi):
@@ -78,7 +122,7 @@ def hae_historia_tietokannasta(paikka_nimi):
             }, inplace=True)
             df.drop(columns=["aika"], inplace=True)
             df["Malli"] = "Toteutunut"
-            df["Sadetodennäköisyys"] = 0.0  # Historiadatassa ei ole todennäköisyyttä
+            df["Sadetodennäköisyys"] = 0.0
         return df
     except Exception as e:
         st.sidebar.error(f"Tietokantavirhe haussa: {e}")
@@ -102,17 +146,17 @@ st_folium(m, width=300, height=250, key="kartta_naytto", returned_objects=[])
 
 st.sidebar.header("🗓️ Valitse ajanjakso graafeille")
 tanaan = date.today()
-alku_pvm = st.sidebar.date_input("Alkupäivä", tanaan - timedelta(days=7))
-loppu_pvm = st.sidebar.date_input("Loppupäivä", tanaan + timedelta(days=7))
+alku_pvm = st.sidebar.date_input("Alkupäivä", tanaan - timedelta(days=2))
+loppu_pvm = st.sidebar.date_input("Loppupäivä", tanaan + timedelta(days=20)) # Nyt voi laittaa pitkälle eteenpäin!
 
 # 4. DATAN HAKU
 nyt_dt = datetime.now().replace(minute=0, second=0, microsecond=0)
 headers = {'User-Agent': 'KalastusSaavahti/1.0 (opiskelu/harrastusprojekti)'}
 
-url_yr = f"https://api.met.no/weatherapi/locationforecast/2.0/complete?lat={valittu_lat}&lon={valittu_lon}"
-# Open-Meteon tuntikyselyyn lisätty: precipitation_probability
-# Open-Meteon päivätasoon (daily) lisätty: sunrise, sunset, moon_phase
-url_om = f"https://api.open-meteo.com/v1/forecast?latitude={valittu_lat}&longitude={valittu_lon}&hourly=temperature_2m,pressure_msl,rain,wind_speed_10m,precipitation_probability&daily=sunrise,sunset,moon_phase&timezone=auto&forecast_days=14&past_days=7"
+aikavyohyke = "Europe/Stockholm" if "Arjeplog" in valittu_paikka else "Europe/Helsinki"
+
+url_yr = f"https://api.met.no/weatherapi/locationforecast/2.0/complete?lat={valittu_lat:.4f}&lon={valittu_lon:.4f}"
+url_om = f"https://api.open-meteo.com/v1/forecast?latitude={valittu_lat:.4f}&longitude={valittu_lon:.4f}&hourly=temperature_2m,pressure_msl,rain,wind_speed_10m,precipitation_probability&timezone={aikavyohyke}&forecast_days=14&past_days=7"
 
 @st.cache_data(ttl=600)
 def hae_data_lahteet(url_y, url_o):
@@ -124,7 +168,7 @@ def hae_data_lahteet(url_y, url_o):
 yr_json, om_json = hae_data_lahteet(url_yr, url_om)
 
 if yr_json and om_json:
-    # --- YR.NO PARSINTA (Tuleva ennuste) ---
+    # --- YR.NO PARSINTA ---
     ts_yr = yr_json["properties"]["timeseries"]
     yr_aika, yr_lampo, yr_paine, yr_tuuli, yr_sade = [], [], [], [], []
     for ts in ts_yr:
@@ -144,7 +188,7 @@ if yr_json and om_json:
     df_yr["Aika"] = df_yr["Aika"].dt.tz_localize(None)
     df_yr_tuleva = df_yr[df_yr["Aika"] >= nyt_dt].copy()
 
-    # --- OPEN-METEO PARSINTA (Tuntitaso) ---
+    # --- OPEN-METEO PARSINTA ---
     om_h = om_json["hourly"]
     df_om_kaikki = pd.DataFrame({
         "Aika": pd.to_datetime(om_h["time"], format='mixed'), 
@@ -160,15 +204,6 @@ if yr_json and om_json:
     df_om_menneet = df_om_kaikki[df_om_kaikki["Aika"] < nyt_dt].copy()
     uusia_tallennettu = tallenna_toteutunut_data(df_om_menneet, valittu_paikka)
     df_om_tuleva = df_om_kaikki[df_om_kaikki["Aika"] >= nyt_dt].copy()
-
-    # --- OPEN-METEO PARSINTA (Päivätaso: Aurinko & Kuu) ---
-    om_d = om_json["daily"]
-    df_astro = pd.DataFrame({
-        "Päivä": pd.to_datetime(om_d["time"]).date,
-        "Aurinko nousee": [datetime.fromisoformat(t).strftime("%H:%M") for t in om_d["sunrise"]],
-        "Aurinko laskee": [datetime.fromisoformat(t).strftime("%H:%M") for t in om_d["sunset"]],
-        "Kuun vaihe": [suomenna_kuun_vaihe(v) for v in om_d["moon_phase"]]
-    })
 
     # --- HISTORIA PILVIKANNASTA ---
     df_historia = hae_historia_tietokannasta(valittu_paikka)
@@ -191,13 +226,13 @@ if yr_json and om_json:
 
     st.markdown("---")
 
-    # 5. SUODATUS JA VISUALISOINTI
+    # 5. SÄÄDATAN SUODATUS JA VISUALISOINTI
     alku_dt = pd.to_datetime(alku_pvm)
     loppu_dt = pd.to_datetime(loppu_pvm) + pd.Timedelta(hours=23, minutes=59)
     df_suodatettu = df_kaikki[(df_kaikki["Aika"] >= alku_dt) & (df_kaikki["Aika"] <= loppu_dt)]
 
     if df_suodatettu.empty:
-        st.warning("Valitulle ajalle ei löydy säädataa. Kokeile laajentaa ajanjaksoa.")
+        st.warning("Valitulle ajalle ei vielä löydy sääennustetta (Sääennusteet yltävät 14 päivää eteenpäin).")
     else:
         st.subheader(f"📊 Sääseuranta ja ennusteet: {valittu_paikka}")
         st.caption("VIHREÄ yhtenäinen viiva = Tietokantaan tallennettu aito historia | Katkoviivat = Tulevat ennusteet")
@@ -224,7 +259,6 @@ if yr_json and om_json:
         st.write("**Tuulen nopeus**")
         st.altair_chart(luo_monikuvaaja(df_suodatettu, "Tuuli", "Tuuli", "m/s"), use_container_width=True)
 
-        # SADEMÄÄRÄGRAAFI (Lisätty sadetodennäköisyys työkaluvihjeeseen)
         st.write("**Sademäärän vertailu (mm/h) & todennäköisyys**")
         sade_kuvaaja = alt.Chart(df_suodatettu).mark_bar(opacity=0.6).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -239,17 +273,34 @@ if yr_json and om_json:
         ).properties(height=200).interactive()
         st.altair_chart(sade_kuvaaja, use_container_width=True)
 
-        # 6. AURINKO JA KUU -TAULUKKO (Suodatetaan reissupäivien mukaan)
-        st.markdown("---")
-        st.subheader("🌅 Auringon ja Kuun ajat reissupäiville")
-        st.caption("Tästä taulukosta näet valitun ajanjakson valoisat ajat sekä kuun vaiheet yön kalastussuunnitelmia varten.")
+    # 6. AURINKO JA KUU -TAULUKKO (Täysin itsenäinen, toimii aina tulevaisuuteen!)
+    st.markdown("---")
+    st.subheader("🌅 Auringon ja Kuun ajat reissupäiville")
+    st.caption("Valitun ajanjakson valoisat ajat sekä kuun vaiheet yön kalastussuunnitelmia varten. (Lasketaan matemaattisesti, toimii mille tahansa päivälle).")
+    
+    # Luodaan lista valituista päivistä valitulla välillä lennosta
+    astro_lista = []
+    nykyinen_pvm = alku_pvm
+    while nykyinen_pvm <= loppu_pvm:
+        # Lasketaan kuun vaihe vapaasti
+        diff = datetime.combine(nykyinen_pvm, datetime.min.time()) - datetime(2000, 1, 6)
+        kuu_val = (diff.days % 29.53059) / 29.53059
+        kuu_txt = suomenna_kuun_vaihe(kuu_val)
         
-        df_astro_suodatettu = df_astro[(df_astro["Päivä"] >= alku_pvm) & (df_astro["Päivä"] <= loppu_pvm)]
+        # Lasketaan auringon nousut ja laskut matemaattisesti tälle leveysasteelle
+        nousu_txt, lasku_txt = laske_aurinko_paiva(nykyinen_pvm, valittu_lat, valittu_lon)
         
-        if not df_astro_suodatettu.empty:
-            # Tulostetaan siisti Streamlit-taulukko ilman indeksejä
-            st.dataframe(df_astro_suodatettu.set_index("Päivä"), use_container_width=True)
-        else:
-            st.info("Laajenna sivupalkin ajanjaksoa nähdäksesi aurinkotiedot.")
+        astro_lista.append({
+            "Päivä": nykyinen_pvm,
+            "Aurinko nousee": nousu_txt,
+            "Aurinko laskee": lasku_txt,
+            "Kuun vaihe": kuu_txt
+        })
+        nykyinen_pvm += timedelta(days=1)
+        
+    df_astro_vapaa = pd.DataFrame(astro_lista)
+    
+    if not df_astro_vapaa.empty:
+        st.dataframe(df_astro_vapaa.set_index("Päivä"), use_container_width=True)
 else:
-    st.error("Säädatan haku rajapinnoista epäonnistui. Tarkista verkkoyhteys.")
+    st.error("Säädatan haku epäonnistui taustalla.")
