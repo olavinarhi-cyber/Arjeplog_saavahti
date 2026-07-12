@@ -69,7 +69,7 @@ st.title("🎣 Kalastajan Säävahti (Yr.no & Open-Meteo)")
 st.sidebar.header("📍 Valitse sijainti kartalta")
 
 # OLETUSKOORDINAATIT (Arjeplog)
-default_lat, default_lon = 66.050, 17.880
+default_lat, default_lon = 66.763, 17.234
 
 if "lat" not in st.session_state:
     st.session_state.lat = default_lat
