@@ -15,8 +15,8 @@ DB_URI = st.secrets["db_uri"]
 PAIKAT = {
     "Miekak (Arjeplog)": {"lat": 66.7630, "lon": 17.2340},
     "Inari (Juutuanjoki)": {"lat": 68.9050, "lon": 27.0080},
-    "Päivärinne (Muhos)":{"lat":64.8842,"lon":25.8628},
-    "Rovaniemi, (keskusta)":{"lat":66.5054,"lon":25.7285}
+    "Päivärinne (Muhos)": {"lat": 64.8842, "lon": 25.8628},
+    "Rovaniemi (keskusta)": {"lat": 66.5054, "lon": 25.7285}
 }
 
 # FUNKTIO KUUN VAIHEEN SUOMENTAMISEKSI
@@ -31,7 +31,7 @@ def suomenna_kuun_vaihe(val):
     else: return "🌘 Vähenevä sirppi"
 
 # AURINGON MATEMAATTINEN LASKENTA
-def laske_aurinko_paiva(pvm, lat, lon):
+def laske_aurinko_paiva(pvm, lat, lon, paikka_nimi):
     fmt_pvm = datetime.combine(pvm, datetime.min.time())
     paiva_vuodesta = fmt_pvm.timetuple().tm_yday
     deklinaatio = 0.409 * math.sin(2 * math.pi * (paiva_vuodesta - 81) / 365)
@@ -45,7 +45,9 @@ def laske_aurinko_paiva(pvm, lat, lon):
     keskipaiva = 12.0 - (lon / 15.0)
     nousu_utc = keskipaiva - math.degrees(tuntikulma) / 15.0
     lasku_utc = keskipaiva + math.degrees(tuntikulma) / 15.0
-    aikakorjaus = 2.0 if lat < 67 else 3.0
+    
+    # Korjattu aikavyöhyke kesäaikaan: Ruotsi (Arjeplog) +2, Suomen kohteet +3
+    aikakorjaus = 2.0 if "Arjeplog" in paikka_nimi else 3.0
     
     nousu_tunnit = (nousu_utc + aikakorjaus) % 24
     lasku_tunnit = (lasku_utc + aikakorjaus) % 24
@@ -116,7 +118,7 @@ tanaan = date.today()
 alku_pvm = st.sidebar.date_input("Alkupäivä", tanaan - timedelta(days=2))
 loppu_pvm = st.sidebar.date_input("Loppupäivä", tanaan + timedelta(days=7))
 
-# 4. RATAPINTOJEN HAKU
+# 4. RAJAPINTOJEN HAKU
 nyt_dt = datetime.now().replace(minute=0, second=0, microsecond=0)
 headers = {'User-Agent': 'KalastusSaavahti/1.0 (opiskelu/harrastusprojekti)'}
 aikavyohyke = "Europe/Stockholm" if "Arjeplog" in valittu_paikka else "Europe/Helsinki"
@@ -231,7 +233,6 @@ if yr_json and om_json:
     else:
         st.subheader(f"📊 Sääkuvaajat: {valittu_paikka}")
         
-        # Apufunktio siistien graafien piirtoon parannetulla korkeudella (300px)
         def luo_erotettu_graafi(data, y_sarake, otsikko, yksikko):
             chart = alt.Chart(data).mark_line(strokeWidth=2).encode(
                 x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -279,7 +280,7 @@ if yr_json and om_json:
             color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
         )
 
-        # TUULIGRAAFIT (Korotettu 260px asti)
+        # TUULIGRAAFIT
         st.write("**💨 Keskituulen nopeus**")
         keski_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -298,7 +299,7 @@ if yr_json and om_json:
         ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(taustavari_kartta, puuska_chart), use_container_width=True)
 
-        # SADEMÄÄRÄ (Korotettu 200px asti)
+        # SADEMÄÄRÄ
         st.write("**🌧️ Sademäärä (mm/h) & Sadeprosentti**")
         sade_kuvaaja = alt.Chart(df_suodatettu).mark_bar(opacity=0.6).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -316,7 +317,7 @@ if yr_json and om_json:
     while nykyinen_pvm <= loppu_pvm:
         diff = datetime.combine(nykyinen_pvm, datetime.min.time()) - datetime(2000, 1, 6)
         kuu_val = (diff.days % 29.53059) / 29.53059
-        nousu_txt, lasku_txt = laske_aurinko_paiva(nykyinen_pvm, valittu_lat, valittu_lon)
+        nousu_txt, lasku_txt = laske_aurinko_paiva(nykyinen_pvm, valittu_lat, valittu_lon, valittu_paikka)
         astro_lista.append({"Päivä": nykyinen_pvm, "Aurinko nousee": nousu_txt, "Aurinko laskee": lasku_txt, "Kuun vaihe": suomenna_kuun_vaihe(kuu_val)})
         nykyinen_pvm += timedelta(days=1)
         
