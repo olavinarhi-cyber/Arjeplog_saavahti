@@ -1,0 +1,7 @@
+streamlit
+requests
+pandas
+altair
+folium
+streamlit-folium
+psycopg2-binary
