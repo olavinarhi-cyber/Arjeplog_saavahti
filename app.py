@@ -269,48 +269,69 @@ if yr_json and om_json:
             st.write("**Lämpötilan kehitys**")
             st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Lämpötila", "Lämpötila", "°C"), use_container_width=True)
 
-        # LASKETAAN TODELLINEN DYNAAMINEN YLÄRAJA TUULELLE
-        maksimi_tuuli = float(df_suodatettu[["Tuuli", "Tuulen puuska"]].max().max())
-        tuuli_katto = max(15.0, math.ceil(maksimi_tuuli + 2.0))
+        # -----------------------------------------------------------------
+        # 1. KESKITUULEN SKAALAUS (Täysin itsenäinen katto keskituulen datasta)
+        # -----------------------------------------------------------------
+        maksimi_keski = float(df_suodatettu["Tuuli"].max())
+        keski_katto = max(10.0, math.ceil(maksimi_keski + 2.0))
 
-        # DYNAAMISET VYÖHYKKEET TUULELLE (Nyt laatikon yläraja joustaa tismalleen tuuli_katon mukaan)
-        taustavyohykkeet = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, tuuli_katto), "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
-            {"aloitus": min(9.0, tuuli_katto), "lopetus": min(13.0, tuuli_katto), "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
-            {"aloitus": min(13.0, tuuli_katto), "lopetus": tuuli_katto, "Väri": "Erittäin kova tuuli (>13 m/s)"}
+        vyohykkeet_keski = pd.DataFrame([
+            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
+            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
+            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Väri": "Erittäin kova tuuli (>13 m/s)"}
         ])
-        taustavari_kartta = alt.Chart(taustavyohykkeet).mark_rect(opacity=0.06).encode(
-            y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, tuuli_katto], zero=True)), y2='lopetus:Q',
+        tausta_keski = alt.Chart(vyohykkeet_keski).mark_rect(opacity=0.06).encode(
+            y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, keski_katto], zero=True)), y2='lopetus:Q',
             color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
         )
 
-        # TUULIGRAAFIT (Nyt scale=alt.Scale(domain=[0, tuuli_katto]) pitää pystyakselin täydellisenä)
         st.write("**💨 Keskituulen nopeus**")
         keski_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
-            y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(domain=[0, tuuli_katto], zero=True)),
+            y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(domain=[0, keski_katto], zero=True)),
             color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
             strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q")]
         ).properties(height=260).interactive(bind_y=False)
-        st.altair_chart(alt.layer(taustavari_kartta, keski_chart), use_container_width=True)
+        st.altair_chart(alt.layer(tausta_keski, keski_chart), use_container_width=True)
+
+        # -----------------------------------------------------------------
+        # 2. TUULEN PUUSKIEN SKAALAUS (Täysin itsenäinen katto puuskien datasta)
+        # -----------------------------------------------------------------
+        maksimi_puuska = float(df_suodatettu["Tuulen puuska"].max())
+        puuska_katto = max(15.0, math.ceil(maksimi_puuska + 2.0))
+
+        vyohykkeet_puuska = pd.DataFrame([
+            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
+            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
+            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Väri": "Erittäin kova tuuli (>13 m/s)"}
+        ])
+        tausta_puuska = alt.Chart(vyohykkeet_puuska).mark_rect(opacity=0.06).encode(
+            y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, puuska_katto], zero=True)), y2='lopetus:Q',
+            color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
+        )
 
         st.write("**🌪️ Tuulen puuskat**")
         puuska_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
-            y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(domain=[0, tuuli_katto], zero=True)),
+            y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(domain=[0, puuska_katto], zero=True)),
             color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
             strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuulen puuska:Q")]
         ).properties(height=260).interactive(bind_y=False)
-        st.altair_chart(alt.layer(taustavari_kartta, puuska_chart), use_container_width=True)
+        st.altair_chart(alt.layer(tausta_puuska, puuska_chart), use_container_width=True)
 
-        # SADEMÄÄRÄ
+        # -----------------------------------------------------------------
+        # 3. SADEMÄÄRÄN SKAALAUS (Nostettu 250px korkeuteen lineaarisella asteikolla)
+        # -----------------------------------------------------------------
+        maksimi_sade = float(df_suodatettu["Sademäärä"].max())
+        sade_katto = max(2.0, maksimi_sade + 0.5)
+
         st.write("**🌧️ Sademäärä (mm/h) & Sadeprosentti**")
         sade_kuvaaja = alt.Chart(df_suodatettu).mark_bar(opacity=0.6).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
-            y=alt.Y("Sademäärä:Q", title="Sademäärä (mm)", stack=None, scale=alt.Scale(type="sqrt")),
+            y=alt.Y("Sademäärä:Q", title="Sademäärä (mm)", scale=alt.Scale(domain=[0, sade_katto], zero=True)),
             color=alt.Color("Malli:N", title="Datalähde"),
             tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip("Sademäärä:Q", title="Sade (mm)"), alt.Tooltip("Sadetodennäköisyys:Q", title="Todennäköisyys (%)")]
-        ).properties(height=200).interactive(bind_y=False)
+        ).properties(height=250).interactive(bind_y=False)
         st.altair_chart(sade_kuvaaja, use_container_width=True)
 
     # 7. ASTROTAULUKKO
