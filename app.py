@@ -90,7 +90,7 @@ def hae_historia_tietokannasta(paikka_nimi):
             df.drop(columns=["aika"], inplace=True)
             df["Malli"] = "Toteutunut"
             df["Sadetodennäköisyys"] = 0.0
-            df["Tuulen puuska"] = df["Tuuli"] # Historiadatassa puuska = keskituuli
+            df["Tuulen puuska"] = df["Tuuli"]
         return df
     except Exception as e:
         st.sidebar.error(f"Tietokantavirhe haussa: {e}")
@@ -98,7 +98,7 @@ def hae_historia_tietokannasta(paikka_nimi):
 
 # 3. KÄYTTÖLIITTYMÄN ALUSTUS
 st.set_page_config(page_title="Säävahti", layout="wide")
-st.title("🎣 Kalastajan & Kanoottireissaajan Säävahti")
+st.title("🎣 Kalareissun Säävahti")
 
 st.sidebar.header("📍 Kohdevalinta")
 valittu_paikka = st.sidebar.selectbox("Valitse kohdealue", list(PAIKAT.keys()))
@@ -114,13 +114,12 @@ tanaan = date.today()
 alku_pvm = st.sidebar.date_input("Alkupäivä", tanaan - timedelta(days=2))
 loppu_pvm = st.sidebar.date_input("Loppupäivä", tanaan + timedelta(days=7))
 
-# 4. RATAPINTOJEN HAKU (Mukana tuulen puuskat: wind_gusts / wind_speed_of_gust)
+# 4. RATAPINTOJEN HAKU
 nyt_dt = datetime.now().replace(minute=0, second=0, microsecond=0)
 headers = {'User-Agent': 'KalastusSaavahti/1.0 (opiskelu/harrastusprojekti)'}
 aikavyohyke = "Europe/Stockholm" if "Arjeplog" in valittu_paikka else "Europe/Helsinki"
 
 url_yr = f"https://api.met.no/weatherapi/locationforecast/2.0/complete?lat={valittu_lat:.4f}&lon={valittu_lon:.4f}"
-# Open-Meteon kyselyyn lisätty wind_gusts_10m tuuliturvallisuutta varten
 url_om = f"https://api.open-meteo.com/v1/forecast?latitude={valittu_lat:.4f}&longitude={valittu_lon:.4f}&hourly=temperature_2m,pressure_msl,rain,wind_speed_10m,wind_gusts_10m,precipitation_probability&timezone={aikavyohyke}&forecast_days=14&past_days=7"
 
 @st.cache_data(ttl=600)
@@ -145,7 +144,7 @@ if yr_json and om_json:
         if "next_1_hours" in ts["data"]: sade = ts["data"]["next_1_hours"]["details"].get("precipitation_amount", 0.0)
         yr_sade.append(sade)
         
-    df_yr = pd.DataFrame({"Aika": pd.to_datetime(yr_aika, format='mixed'), "Lämpötila": yr_lampo, "Ilmanpaine": yr_paine, "Sademäärä": yr_sade, "Tuuli": yr_tuuli, "Tuulen puuska": yr_puuska, "Malli": "Yr.no (Huipputarkka 1km)", "Sadetodennäköisyys": 0.0})
+    df_yr = pd.DataFrame({"Aika": pd.to_datetime(yr_aika, format='mixed'), "Lämpötila": yr_lampo, "Ilmanpaine": yr_paine, "Sademäärä": yr_sade, "Tuuli": yr_tuuli, "Tuulen puuska": yr_puuska, "Malli": "Yr.no Ennuste", "Sadetodennäköisyys": 0.0})
     df_yr["Aika"] = df_yr["Aika"].dt.tz_localize(None)
     df_yr_tuleva = df_yr[df_yr["Aika"] >= nyt_dt].copy()
 
@@ -154,7 +153,7 @@ if yr_json and om_json:
     df_om_kaikki = pd.DataFrame({
         "Aika": pd.to_datetime(om_h["time"], format='mixed'), "Lämpötila": om_h["temperature_2m"], "Ilmanpaine": om_h["pressure_msl"],
         "Sademäärä": om_h["rain"], "Tuuli": om_h["wind_speed_10m"], "Tuulen puuska": om_h["wind_gusts_10m"],
-        "Sadetodennäköisyys": om_h["precipitation_probability"], "Malli": "Open-Meteo (ICON 7km)"
+        "Sadetodennäköisyys": om_h["precipitation_probability"], "Malli": "Open-Meteo Ennuste"
     })
     df_om_kaikki["Aika"] = df_om_kaikki["Aika"].dt.tz_localize(None)
     
@@ -165,18 +164,16 @@ if yr_json and om_json:
     # --- HISTORIA PILVIKANNASTA ---
     df_historia = hae_historia_tietokannasta(valittu_paikka)
     
-    # 5. DASHBOARD: KULUVA HETKI JA TRENDI
+    # 5. TILANNEHUONE
     if not df_yr_tuleva.empty:
         tuntia_sitten = nyt_dt - timedelta(hours=3)
         paine_nyt = df_yr_tuleva.iloc[0]['Ilmanpaine']
-        
-        # Lasketaan ilmanpaineen suunta pilvikannasta tai ennusteesta
         df_paine_hist = df_historia[df_historia["Aika"] == tuntia_sitten]
         paine_suunta = "— tasainen"
         if not df_paine_hist.empty:
             vanha_paine = df_paine_hist.iloc[0]['Ilmanpaine']
             if paine_nyt > vanha_paine + 0.5: paine_suunta = "↗ NOUSEVA (Keli paranee)"
-            elif paine_nyt < vanha_paine - 0.5: paine_suunta = "↘ LASKEVA (Kala aktivoituu / Rintama saapuu)"
+            elif paine_nyt < vanha_paine - 0.5: paine_suunta = "↘ LASKEVA (Kala aktivoituu)"
 
         st.markdown("### ⚡ Tilannehuone juuri nyt")
         c1, c2, c3 = st.columns(3)
@@ -200,58 +197,68 @@ if yr_json and om_json:
     if df_suodatettu.empty:
         st.warning("Valitulle ajalle ei vielä löydy sääennustetta (Sääennusteet yltävät 14 päivää eteenpäin).")
     else:
-        st.subheader(f"📊 Laajennettu sääseuranta: {valittu_paikka}")
-        
-        # VISUALISOINTI 1: Yhdistetty Lämpö ja Paine (Kaksi Y-akselia)
-        st.write("**🌡️ Ilmanpaineen ja Lämpötilan yhteiskuvaaja (Syöntitrendit)**")
-        
-        pohja = alt.Chart(df_suodatettu).encode(
-            x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45))
-        )
-        
-        linja_paine = pohja.mark_line(strokeWidth=2.5).encode(
-            y=alt.Y("Ilmanpaine:Q", title="Ilmanpaine (hPa)", scale=alt.Scale(zero=False)),
-            color=alt.value("#1f77b4"),
-            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Ilmanpaine:Q", title="Paine"), alt.Tooltip("Malli:N")]
-        )
-        
-        linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 2]).encode(
-            y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(zero=False)),
-            color=alt.value("#d62728"),
-            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q", title="Lämpö"), alt.Tooltip("Malli:N")]
-        )
-        
-        yhdistetty = alt.layer(linja_paine, linja_lampo).resolve_scale(y='independent').properties(height=350).interactive()
-        st.altair_chart(yhdistetty, use_container_width=True)
-        st.caption("🔵 Sininen yhtenäinen viiva = Ilmanpaine (vasen akseli) | 🔴 Punainen katkoviiva = Lämpötila (oikea akseli)")
+        st.subheader(f"📊 Sääseuranta ja ennusteet: {valittu_paikka}")
+        st.caption("VIHREÄ yhtenäinen viiva = Tietokantaan tallennettu aito historia | SININEN katkoviiva = Yr.no | ORANSSI katkoviiva = Open-Meteo")
 
-        # VISUALISOINTI 2: Turvallisuusgraafi (Tuuli + Puuskat kanooteille)
-        st.write("**💨 Kanoottiturvallisuus: Keskituuli ja Tuulen puuskat**")
-        
-        tuuli_pohja = alt.Chart(df_suodatettu).encode(
-            x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45))
-        )
-        
-        keskituuli_kayra = tuuli_pohja.mark_line(strokeWidth=2).encode(
-            y=alt.Y("Tuuli:Q", title="Tuulen nopeus (m/s)", scale=alt.Scale(domain=[0, 20])),
-            color=alt.Color("Malli:N", title="Malli"),
-            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q", title="Keskituuli"), alt.Tooltip("Tuulen puuska:Q", title="Puuska"), alt.Tooltip("Malli:N")]
-        )
-        
-        puuska_kayra = tuuli_pohja.mark_line(strokeWidth=1, strokeDash=[2, 3], opacity=0.7).encode(
-            y=alt.Y("Tuulen puuska:Q"),
-            color=alt.Color("Malli:N"),
-        )
-        
-        # Vaararaja 10 m/s taustaväriksi suojaamaan kanoonmatkaa
-        vaararaja = alt.Chart(pd.DataFrame({'y': [9]})).mark_rule(color='orange', strokeWidth=1.5, strokeDash=[5, 5]).encode(y='y:Q')
-        katastrofiraja = alt.Chart(pd.DataFrame({'y': [13]})).mark_rule(color='red', strokeWidth=2).encode(y='y:Q')
+        # Apufunktio siistien, eroteltujen graafien piirtoon (Poistaa sahalaitaisuuden)
+        def luo_erotettu_graafi(data, y_sarake, otsikko, yksikko):
+            chart = alt.Chart(data).mark_line(strokeWidth=2).encode(
+                x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
+                y=alt.Y(f"{y_sarake}:Q", title=f"{otsikko} ({yksikko})", scale=alt.Scale(zero=False)),
+                color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(
+                    domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"],
+                    range=["#2ca02c", "#1f77b4", "#ff7f0e"]
+                )),
+                strokeDash=alt.StrokeDash("Malli:N", sort=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"]),
+                tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip(f"{y_sarake}:Q"), alt.Tooltip("Malli:N")]
+            ).properties(height=260).interactive()
+            return chart
 
-        tuuligraafi = alt.layer(keskituuli_kayra, puuska_kayra, vaararaja, katastrofiraja).properties(height=280).interactive()
-        st.altair_chart(tuuligraafi, use_container_width=True)
-        st.caption("Yhtenäinen viiva = Keskituuli | Ohut katkoviiva = Tuulen puuskat | Oranssi viiva = Puuskavaara kanooteille (9 m/s) | Punainen viiva = Ehdoton vesillelähtökielto (13 m/s)")
+        st.write("**Ilmanpaineen kehitys**")
+        st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Ilmanpaine", "Ilmanpaine", "hPa"), use_container_width=True)
 
-        # VISUALISOINTI 3: Sademäärä
+        st.write("**Lämpötilan kehitys**")
+        st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Lämpötila", "Lämpötila", "°C"), use_container_width=True)
+
+        # MÄÄRITETÄÄN HAALEAT TAUSTAVÄRIT TUULELLE (Vihreä, Keltainen, Punainen vyöhyke)
+        taustavyohykkeet = pd.DataFrame([
+            {"aloitus": 0, "lopetus": 9, "Väri": "Turvallinen (0-9 m/s)"},
+            {"aloitus": 9, "lopetus": 13, "Väri": "Huomio/Puuskat (9-13 m/s)"},
+            {"aloitus": 13, "lopetus": 25, "Väri": "Vaara kanooteille (>13 m/s)"}
+        ])
+        
+        taustavari_kartta = alt.Chart(taustavyohykkeet).mark_rect(opacity=0.08).encode(
+            y=alt.Y('aloitus:Q', scale=alt.Scale(domain=[0, 22])),
+            y2='lopetus:Q',
+            color=alt.Color('Väri:N', title="Kanoottikeli", scale=alt.Scale(
+                domain=["Turvallinen (0-9 m/s)", "Huomio/Puuskat (9-13 m/s)", "Vaara kanooteille (>13 m/s)"],
+                range=["green", "orange", "red"]
+            ))
+        )
+
+        # GRAAFI 3: Keskituulen nopeus
+        st.write("**💨 Keskituulen nopeus**")
+        keskituuli_viiva = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
+            x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
+            y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(domain=[0, 22])),
+            color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
+            strokeDash=alt.StrokeDash("Malli:N", sort=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"]),
+            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q", title="Keskituuli"), alt.Tooltip("Malli:N")]
+        )
+        st.altair_chart(alt.layer(taustavari_kartta, keskituuli_viiva).properties(height=240).interactive(), use_container_width=True)
+
+        # GRAAFI 4: Tuulen puuskat
+        st.write("**🌪️ Tuulen puuskat (Kriittinen kanooteille)**")
+        puuska_viiva = alt.Chart(df_suodatettu).mark_line(strokeWidth=2).encode(
+            x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
+            y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(domain=[0, 22])),
+            color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e"])),
+            strokeDash=alt.StrokeDash("Malli:N", sort=["Toteutunut", "Yr.no Ennuste", "Open-Meteo Ennuste"]),
+            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuulen puuska:Q", title="Puuskavoima"), alt.Tooltip("Malli:N")]
+        )
+        st.altair_chart(alt.layer(taustavari_kartta, puuska_viiva).properties(height=240).interactive(), use_container_width=True)
+
+        # GRAAFI 5: Sademäärä
         st.write("**🌧️ Sademäärä (mm/h) & Sadeprosentti**")
         sade_kuvaaja = alt.Chart(df_suodatettu).mark_bar(opacity=0.6).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -276,4 +283,4 @@ if yr_json and om_json:
     df_astro_vapaa = pd.DataFrame(astro_lista)
     if not df_astro_vapaa.empty: st.dataframe(df_astro_vapaa.set_index("Päivä"), use_container_width=True)
 else:
-    st.error("Säädatan haku epäonnistui rajapinnoissa.")
+    st.error("Säädatan haku epäonnistui rajapinnoista.")
