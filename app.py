@@ -62,8 +62,8 @@ def hae_historia_tietokannasta(lat, lon):
         return pd.DataFrame()
 
 # 2. SOVELLUKSEN ASETUKSET JA KÄYTTÖLIITTYMÄ
-st.set_page_config(page_title="Monimalli Säävahti", layout="wide")
-st.title("🎣 Kalastajan Monimalli Säävahti (Yr.no vs Open-Meteo)")
+st.set_page_config(page_title="Säävahti", layout="wide")
+st.title("🎣 Kalastajan Säävahti (Yr.no & Open-Meteo)")
 
 # SIVUPALKKI: Kartta ja Ajankohta
 st.sidebar.header("📍 Valitse sijainti kartalta")
