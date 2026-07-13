@@ -6,3 +6,5 @@ folium
 streamlit-folium
 psycopg2-binary
 fmiopendata
+smhi-open-data
+
