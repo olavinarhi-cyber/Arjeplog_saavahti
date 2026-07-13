@@ -4,10 +4,17 @@ import pandas as pd
 import altair as alt
 import psycopg2
 import math
+import socket
+import traceback
 from datetime import datetime, date, timedelta
 import zoneinfo
 from streamlit_folium import st_folium
 import folium
+
+# fmiopendata-kirjaston sisäiset HTTP-kutsut (mm. parametrien nimien haku FMI:n meta-rajapinnasta,
+# noin 15-20 erillistä kutsua per ennustehaku) tehdään ilman timeoutia. Ilman tätä yksikin hidas
+# tai jumiutunut yhteys FMI:hin voi jumittaa koko Streamlit-sovelluksen ilman selkeää virheilmoitusta.
+socket.setdefaulttimeout(15)
 
 # Tuodaan FMI-kirjasto mukaan
 from fmiopendata.wfs import download_stored_query
@@ -17,10 +24,10 @@ DB_URI = st.secrets["db_uri"]
 
 # 1. MÄÄRITELLÄÄN KIINTEÄT SÄÄASEMAT / KALAPAIKAT
 PAIKAT = {
-    "Miekak (Arjeplog)": {"lat": 66.7630, "lon": 17.2340},
-    "Inari (Juutuanjoki)": {"lat": 68.9050, "lon": 27.0080},
-    "Päivärinne (Muhos)": {"lat": 64.8842, "lon": 25.8628},
-    "Rovaniemi (keskusta)": {"lat": 66.5054, "lon": 25.7285}
+    "Miekak (Arjeplog)": {"lat": 66.7630, "lon": 17.2340, "maa": "SE"},
+    "Inari (Juutuanjoki)": {"lat": 68.9050, "lon": 27.0080, "maa": "FI"},
+    "Päivärinne (Muhos)": {"lat": 64.8842, "lon": 25.8628, "maa": "FI"},
+    "Rovaniemi (keskusta)": {"lat": 66.5054, "lon": 25.7285, "maa": "FI"}
 }
 
 # FUNKTIO KUUN VAIHEEN SUOMENTAMISEKSI
@@ -35,7 +42,7 @@ def suomenna_kuun_vaihe(val):
     else: return "🌘 Vähenevä sirppi"
 
 # AURINGON MATEMAATTINEN LASKENTA
-def laske_aurinko_paiva(pvm, lat, lon, paikka_nimi):
+def laske_aurinko_paiva(pvm, lat, lon, aikavyohyke):
     fmt_pvm = datetime.combine(pvm, datetime.min.time())
     paiva_vuodesta = fmt_pvm.timetuple().tm_yday
     deklinaatio = 0.409 * math.sin(2 * math.pi * (paiva_vuodesta - 81) / 365)
@@ -50,16 +57,23 @@ def laske_aurinko_paiva(pvm, lat, lon, paikka_nimi):
     nousu_utc = keskipaiva - math.degrees(tuntikulma) / 15.0
     lasku_utc = keskipaiva + math.degrees(tuntikulma) / 15.0
     
-    aikakorjaus = 2.0 if "Arjeplog" in paikka_nimi else 3.0
+    # Käytetään valitun paikan todellista aikavyöhykettä (huomioi myös kesä-/talviajan automaattisesti)
+    nyt_utc = datetime.combine(pvm, datetime.min.time(), tzinfo=zoneinfo.ZoneInfo("UTC"))
+    aikakorjaus = aikavyohyke.utcoffset(nyt_utc).total_seconds() / 3600.0
     
     nousu_tunnit = (nousu_utc + aikakorjaus) % 24
     lasku_tunnit = (lasku_utc + aikakorjaus) % 24
     return f"{int(nousu_tunnit):02d}:{int((nousu_tunnit%1)*60):02d}", f"{int(lasku_tunnit):02d}:{int((lasku_tunnit%1)*60):02d}"
 
 # 2. PILVITIETOKANTAFUNKTIOT
+@st.cache_resource
+def hae_tietokantayhteys():
+    """Yksi uudelleenkäytettävä yhteys istunnon ajaksi, ei uutta TCP/SSL-kädenpuristusta joka rerunilla."""
+    return psycopg2.connect(DB_URI, sslmode='require')
+
 def tallenna_toteutunut_data(df_tunnit, paikka_nimi):
     try:
-        conn = psycopg2.connect(DB_URI, sslmode='require')
+        conn = hae_tietokantayhteys()
         cursor = conn.cursor()
         nyt_str = datetime.now().strftime("%Y-%m-%dT%H:00:00")
         riveja_lisatty = 0
@@ -77,7 +91,6 @@ def tallenna_toteutunut_data(df_tunnit, paikka_nimi):
                 if cursor.rowcount > 0: riveja_lisatty += 1
         conn.commit()
         cursor.close()
-        conn.close()
         return riveja_lisatty
     except Exception as e:
         st.sidebar.error(f"Tietokantavirhe tallennuksessa: {e}")
@@ -85,12 +98,11 @@ def tallenna_toteutunut_data(df_tunnit, paikka_nimi):
 
 def hae_historia_tietokannasta(paikka_nimi):
     try:
-        conn = psycopg2.connect(DB_URI, sslmode='require')
+        conn = hae_tietokantayhteys()
         lat = PAIKAT[paikka_nimi]["lat"]
         lon = PAIKAT[paikka_nimi]["lon"]
         query = "SELECT aika, lampotila, ilmanpaine, tuuli, sade FROM toteutunut_saa WHERE lat = %s AND lon = %s"
         df = pd.read_sql_query(query, conn, params=(lat, lon))
-        conn.close()
         if not df.empty:
             df["Aika"] = pd.to_datetime(df["aika"], format='mixed').dt.tz_localize(None)
             df.rename(columns={"lampotila": "Lämpötila", "ilmanpaine": "Ilmanpaine", "sade": "Sademäärä", "tuuli": "Tuuli"}, inplace=True)
@@ -124,7 +136,7 @@ loppu_pvm = st.sidebar.date_input("Loppupäivä", tanaan + timedelta(days=7))
 # 4. RAJAPINTOJEN HAKU
 nyt_dt = datetime.now().replace(minute=0, second=0, microsecond=0)
 headers = {'User-Agent': 'KalastusSaavahti/1.0 (opiskelu/harrastusprojekti)'}
-aikavyohyke_nimi = "Europe/Stockholm" if "Arjeplog" in valittu_paikka else "Europe/Helsinki"
+aikavyohyke_nimi = "Europe/Stockholm" if PAIKAT[valittu_paikka]["maa"] == "SE" else "Europe/Helsinki"
 aikavyohyke = zoneinfo.ZoneInfo(aikavyohyke_nimi)
 
 url_yr = f"https://api.met.no/weatherapi/locationforecast/2.0/complete?lat={valittu_lat:.4f}&lon={valittu_lon:.4f}"
@@ -136,33 +148,42 @@ def hae_ensisijainen_data(url_y):
 
 yr_json = hae_ensisijainen_data(url_yr)
 
-# FUNKTIO KANSALLISEN DATAN HAKUUN JA PARSINTAAN
+# FUNKTIO KANSALLISEN DATAN HAKUUN JA KORJATTUUN PARSINTAAN
 @st.cache_data(ttl=600)
 def hae_kansallinen_data(lat, lon, paikka_nimi):
     df_ennuste = pd.DataFrame()
     df_historia_kantaan = pd.DataFrame()
 
-    if "Arjeplog" in paikka_nimi:
-        # --- RUOTSI: SMHI PISTE-ENNUSTE PÄIVITETTY VERSIOON 11 ---
+    if PAIKAT[paikka_nimi]["maa"] == "SE":
+        # --- RUOTSI: SMHI ---
+        # HUOM: SMHI lopetti vanhan PMP3G v2 -rajapinnan käytön 31.3.2026 (palauttaa nyt HTTP 404).
+        # Tilalle tuli SNOW1g v1, jonka rakenne on erilainen: litteä "data"-olio parametrien
+        # "parameters"-listan sijaan, aikakenttä "time" (ei "validTime") ja tuntemattomat arvot
+        # merkitään sentinel-arvolla 9999, joka pitää suodattaa pois.
         try:
-            url_smhi = f"https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/11/geotype/point/lon/{lon:.4f}/lat/{lat:.4f}/data.json"
+            url_smhi = f"https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/{lon:.4f}/lat/{lat:.4f}/data.json"
             res = requests.get(url_smhi, timeout=10)
             if res.status_code == 200:
                 data = res.json()
                 ajat, lammat, paineet, tuulet, puuskat, sade = [], [], [], [], [], []
                 
                 for entry in data.get("timeSeries", []):
-                    aika = pd.to_datetime(entry["validTime"]).tz_convert(aikavyohyke_nimi).tz_localize(None)
+                    aika_str = entry["time"][:19].replace("Z", "")
+                    aika = pd.to_datetime(aika_str)
+                    d = entry.get("data", {})
                     
-                    t_val, p_val, w_val, g_val, r_val = 0.0, 1013.25, 0.0, 0.0, 0.0
-                    for param in entry.get("parameters", []):
-                        p_name = param.get("name")
-                        p_values = param.get("values", [0.0])
-                        if p_name == "t": t_val = float(p_values[0])
-                        elif p_name == "msl": p_val = float(p_values[0])
-                        elif p_name == "ws": w_val = float(p_values[0])
-                        elif p_name == "gust": g_val = float(p_values[0])
-                        elif p_name == "pmean": r_val = float(p_values[0])
+                    def hae_arvo(avain, oletus):
+                        arvo = d.get(avain, oletus)
+                        # 9999 (ja siihen verrattavat puuttuvan tiedon merkit) tarkoittavat "ei tietoa"
+                        if arvo is None or arvo == 9999:
+                            return oletus
+                        return float(arvo)
+                    
+                    t_val = hae_arvo("air_temperature", 0.0)
+                    p_val = hae_arvo("air_pressure_at_mean_sea_level", 1013.25)
+                    w_val = hae_arvo("wind_speed", 0.0)
+                    g_val = hae_arvo("wind_speed_of_gust", w_val)
+                    r_val = hae_arvo("precipitation_amount_mean", 0.0)
                     
                     ajat.append(aika)
                     lammat.append(t_val)
@@ -176,10 +197,12 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                         "Aika": ajat, "Lämpötila": lammat, "Ilmanpaine": paineet, "Sademäärä": sade,
                         "Tuuli": tuulet, "Tuulen puuska": puuskat, "Malli": "SMHI Ennuste", "Sadetodennäköisyys": 0.0
                     })
+            else:
+                st.sidebar.warning(f"SMHI vastasi statuksella {res.status_code}")
         except Exception as e:
             st.sidebar.warning(f"SMHI virhe: {e}")
     else:
-        # --- SUOMI: FMI OPENDATA ENNUSTE + INTERPOLOINTIKORJAUS VIIVOILLE ---
+        # --- SUOMI: FMI OPENDATA NUMEERISUUS- JA INTERPOLOINTIKORJAUS ---
         try:
             paikka_str = f"latlon={lat:.4f},{lon:.4f}"
             start_t = datetime.now(zoneinfo.ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:00:00Z")
@@ -206,18 +229,23 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                         "Tuulen puuska": asema_data.get("WindGust", {}).get("values", asema_data.get("WindSpeedMS", {}).get("values", [None]*len(fmi_ajat))),
                     })
                     
-                    # Korjataan suorat viivat luomalla täydellinen 1h tuntiruudukko ja interpoloimalla arvot pehmeästi
+                    # KORJAUS: Pakotetaan sarakkeet numeerisiksi (object -> float) ennen interpolointia
+                    numeeriset = ["Lämpötila", "Ilmanpaine", "Tuuli", "Tuulen puuska", "Sademäärä"]
+                    for col in numeeriset:
+                        df_fmi_raaka[col] = pd.to_numeric(df_fmi_raaka[col], errors='coerce')
+                    
                     tunti_ruudukko = pd.date_range(start=df_fmi_raaka["Aika"].min(), end=df_fmi_raaka["Aika"].max(), freq="h")
                     df_ennuste = pd.DataFrame({"Aika": tunti_ruudukko})
                     df_ennuste = pd.merge(df_ennuste, df_fmi_raaka, on="Aika", how="left")
                     
-                    # Pehmennetään numeeriset sarakkeet jatkuvaksi lineaariseksi käyräksi
-                    numeeriset = ["Lämpötila", "Ilmanpaine", "Tuuli", "Tuulen puuska", "Sademäärä"]
+                    # Nyt interpolointi onnistuu ongelmitta numeerisille tyypeille
                     df_ennuste[numeeriset] = df_ennuste[numeeriset].interpolate(method="linear").fillna(0.0)
                     df_ennuste["Malli"] = "FMI Ennuste"
                     df_ennuste["Sadetodennäköisyys"] = 0.0
         except Exception as e:
             st.sidebar.warning(f"FMI ennustevirhe: {e}")
+            with st.sidebar.expander("Näytä tekninen virheviesti (FMI ennuste)"):
+                st.code(traceback.format_exc())
 
         # --- SUOMI: FMI TOTEUTUNEET HAVAINNOT (PILVEEN) ---
         try:
@@ -239,15 +267,19 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                 if h_ajat:
                     df_historia_kantaan = pd.DataFrame({
                         "Aika": h_ajat,
-                        "Lämpötila": asema_hist.get("Air temperature", {}).get("values", [0.0]*len(h_ajat)),
-                        "Ilmanpaine": asema_hist.get("Pressure (msl)", {}).get("values", [1013.25]*len(h_ajat)),
-                        "Sademäärä": [max(0.0, r) if r is not None else 0.0 for r in asema_hist.get("Precipitation amount", {}).get("values", [0.0]*len(h_ajat))],
-                        "Tuuli": asema_hist.get("Wind speed", {}).get("values", [0.0]*len(h_ajat)),
-                        "Tuulen puuska": asema_hist.get("Gust speed", {}).get("values", asema_hist.get("Wind speed", {}).get("values", [0.0]*len(h_ajat))),
+                        "Lämpötila": pd.to_numeric(asema_hist.get("Air temperature", {}).get("values", []), errors='coerce'),
+                        "Ilmanpaine": pd.to_numeric(asema_hist.get("Pressure (msl)", {}).get("values", []), errors='coerce'),
+                        "Sademäärä": pd.to_numeric(asema_hist.get("Precipitation amount", {}).get("values", []), errors='coerce'),
+                        "Tuuli": pd.to_numeric(asema_hist.get("Wind speed", {}).get("values", []), errors='coerce'),
+                        "Tuulen puuska": pd.to_numeric(asema_hist.get("Gust speed", {}).get("values", []), errors='coerce'),
                         "Malli": "Toteutunut", "Sadetodennäköisyys": 0.0
-                    }).dropna()
+                    })
+                    df_historia_kantaan["Sademäärä"] = df_historia_kantaan["Sademäärä"].apply(lambda r: max(0.0, r) if pd.notnull(r) else 0.0)
+                    df_historia_kantaan = df_historia_kantaan.dropna()
         except Exception as e:
-            st.sidebar.warning(f"FMI havintovirhe: {e}")
+            st.sidebar.warning(f"FMI havaintovirhe: {e}")
+            with st.sidebar.expander("Näytä tekninen virheviesti (FMI havainnot)"):
+                st.code(traceback.format_exc())
             
     return df_ennuste, df_historia_kantaan
 
@@ -324,7 +356,7 @@ if yr_json:
     st.markdown("### ⚙️ Graafien hallinta")
     val_col1, val_col2 = st.columns(2)
     
-    kakkosmalli_nimi = "Vain SMHI" if "Arjeplog" in valittu_paikka else "Vain FMI"
+    kakkosmalli_nimi = "Vain SMHI" if PAIKAT[valittu_paikka]["maa"] == "SE" else "Vain FMI"
     
     with val_col1:
         valittu_malli = st.radio(
@@ -374,7 +406,7 @@ if yr_json:
                 color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Ilmanpaine:Q")]
             )
-            linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3], interpolate="monotone").encode(
+            linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3, 4, 3], interpolate="monotone").encode(
                 y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(zero=False)),
                 color=alt.Color("Malli:N"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q")]
@@ -454,7 +486,7 @@ if yr_json:
     while nykyinen_pvm <= loppu_pvm:
         diff = datetime.combine(nykyinen_pvm, datetime.min.time()) - datetime(2000, 1, 6)
         kuu_val = (diff.days % 29.53059) / 29.53059
-        nousu_txt, lasku_txt = laske_aurinko_paiva(nykyinen_pvm, valittu_lat, valittu_lon, valittu_paikka)
+        nousu_txt, lasku_txt = laske_aurinko_paiva(nykyinen_pvm, valittu_lat, valittu_lon, aikavyohyke)
         astro_lista.append({"Päivä": nykyinen_pvm, "Aurinko nousee": nousu_txt, "Aurinko laskee": lasku_txt, "Kuun vaihe": suomenna_kuun_vaihe(kuu_val)})
         nykyinen_pvm += timedelta(days=1)
         
