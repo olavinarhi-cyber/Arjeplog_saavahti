@@ -379,44 +379,67 @@ if yr_json:
         st.warning("Valitulle ajalle ei vielä löydy säädataa.")
     else:
         st.subheader(f"📊 Sääkuvaajat: {valittu_paikka}")
-        
-        def luo_erotettu_graafi(data, y_sarake, otsikko, yksikko):
-            chart = alt.Chart(data).mark_line(strokeWidth=2, interpolate="monotone").encode(
-                x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
-                y=alt.Y(f"{y_sarake}:Q", title=f"{otsikko} ({yksikko})", scale=alt.Scale(zero=False)),
-                color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(
-                    domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"],
-                    range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"]
-                )),
-                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
-                tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip(f"{y_sarake}:Q"), alt.Tooltip("Malli:N")]
-            ).properties(height=300).interactive(bind_y=False)
-            return chart
 
         # LÄMPÖ & PAINE
         if yhdistamisen_tila == "Yhdistä Lämpö & Paine":
             st.write("**Ilmanpaineen ja Lämpötilan yhteiskuvaaja**")
             pohja = alt.Chart(df_suodatettu).encode(x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)))
             
+            # Ilmanpaine (Mallikohtaiset värit, yhtenäinen viiva)
             linja_paine = pohja.mark_line(strokeWidth=2, interpolate="monotone").encode(
                 y=alt.Y("Ilmanpaine:Q", title="Ilmanpaine (hPa)", scale=alt.Scale(zero=False)),
                 color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
-                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Ilmanpaine:Q")]
             )
-            linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3, 4, 3], interpolate="monotone").encode(
+            # Lämpötila (Pakotettu erottuvaksi tummanharmaaksi katkoviivaksi)
+            linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3], color="#444444", interpolate="monotone").encode(
                 y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(zero=False)),
-                color=alt.Color("Malli:N", title="Datalähde"),
-                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q")]
             )
             st.altair_chart(alt.layer(linja_paine, linja_lampo).resolve_scale(y='independent').properties(height=300).interactive(bind_y=False), use_container_width=True)
-            st.caption("💡 Yhtenäinen viiva = Ilmanpaine (vasen akseli) | Katkoviiva = Lämpötila (oikea akseli)")
+            st.caption("💡 Väriviiva = Ilmanpaine (vasen akseli) | Tumma katkoviiva = Lämpötila (oikea akseli)")
         else:
+            # --- ERILTISET KUVAAJAT ---
             st.write("**Ilmanpaineen kehitys**")
-            st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Ilmanpaine", "Ilmanpaine", "hPa"), use_container_width=True)
+            chart_paine = alt.Chart(df_suodatettu).mark_line(strokeWidth=2, interpolate="monotone").encode(
+                x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
+                y=alt.Y("Ilmanpaine:Q", title="Ilmanpaine (hPa)", scale=alt.Scale(zero=False)),
+                color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
+                tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip("Ilmanpaine:Q"), alt.Tooltip("Malli:N")]
+            ).properties(height=300).interactive(bind_y=False)
+            st.altair_chart(chart_paine, use_container_width=True)
+
+            # LÄMPÖTILA KUVAAJA VÄRILLISELLÄ TAUSTALLA (ILMAN TAUSTASELITETTÄ)
             st.write("**Lämpötilan kehitys**")
-            st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Lämpötila", "Lämpötila", "°C"), use_container_width=True)
+            maksimi_l = float(df_suodatettu["Lämpötila"].max()) if not df_suodatettu["Lämpötila"].empty else 25.0
+            minimi_l = float(df_suodatettu["Lämpötila"].min()) if not df_suodatettu["Lämpötila"].empty else 10.0
+            katto_l = max(26.0, math.ceil(maksimi_l + 2.0))
+            lattia_l = min(15.0, math.floor(minimi_l - 2.0))
+
+            vyohykkeet_lampo = pd.DataFrame([
+                {"aloitus": lattia_l, "lopetus": min(20.0, katto_l), "Taso": "Haalean sininen (<20°C)"},
+                {"aloitus": max(lattia_l, 20.0), "lopetus": min(25.0, katto_l), "Taso": "Haalean keltainen (20-25°C)"},
+                {"aloitus": max(lattia_l, 25.0), "lopetus": katto_l, "Taso": "Haalean punainen (>25°C)"}
+            ])
+            
+            tausta_lampo = alt.Chart(vyohykkeet_lampo).mark_rect(opacity=0.07).encode(
+                y=alt.Y('aloitus:Q', scale=alt.Scale(domain=[lattia_l, katto_l], zero=False)), y2='lopetus:Q',
+                color=alt.Color('Taso:N', scale=alt.Scale(
+                    domain=["Haalean sininen (<20°C)", "Haalean keltainen (20-25°C)", "Haalean punainen (>25°C)"], 
+                    range=["#1f77b4", "#ffcc00", "#d62728"]
+                ), legend=None) # Piilotetaan taustavärityksen oma selite kokonaan
+            )
+
+            viiva_lampo = alt.Chart(df_suodatettu).mark_line(strokeWidth=2, interpolate="monotone").encode(
+                x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
+                y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(domain=[lattia_l, katto_l], zero=False)),
+                color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
+                tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip("Lämpötila:Q"), alt.Tooltip("Malli:N")]
+            ).properties(height=300).interactive(bind_y=False)
+
+            st.altair_chart(alt.layer(tausta_lampo, viiva_lampo).resolve_scale(color='independent'), use_container_width=True)
 
         # 1. KESKITUULEN SKAALAUS
         maksimi_keski = float(df_suodatettu["Tuuli"].max()) if not df_suodatettu["Tuuli"].empty else 0.0
