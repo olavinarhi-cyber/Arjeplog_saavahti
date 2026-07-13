@@ -385,14 +385,12 @@ if yr_json:
             st.write("**Ilmanpaineen ja Lämpötilan yhteiskuvaaja**")
             pohja = alt.Chart(df_suodatettu).encode(x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)))
             
-            # Ilmanpaine (Mallikohtaiset värit, yhtenäinen viiva, sidottu selite)
             linja_paine = pohja.mark_line(strokeWidth=2, interpolate="monotone").encode(
                 y=alt.Y("Ilmanpaine:Q", title="Ilmanpaine (hPa)", scale=alt.Scale(zero=False)),
                 color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
                 strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Ilmanpaine:Q")]
             )
-            # Lämpötila (Pakotettu kontrastiväriksi, katkoviiva)
             linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3], color="#444444", interpolate="monotone").encode(
                 y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(zero=False)),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q")]
@@ -411,7 +409,7 @@ if yr_json:
             ).properties(height=300).interactive(bind_y=False)
             st.altair_chart(chart_paine, use_container_width=True)
 
-            # LÄMPÖTILA KUVAAJA VÄRILLISELLÄ TAUSTALLA (ILMAN TAUSTASELITETTÄ)
+            # LÄMPÖTILA KUVAAJA VÄRILLISELLÄ TAUSTALLA
             st.write("**Lämpötilan kehitys**")
             maksimi_l = float(df_suodatettu["Lämpötila"].max()) if not df_suodatettu["Lämpötila"].empty else 25.0
             minimi_l = float(df_suodatettu["Lämpötila"].min()) if not df_suodatettu["Lämpötila"].empty else 10.0
@@ -424,7 +422,6 @@ if yr_json:
                 {"aloitus": max(lattia_l, 25.0), "lopetus": katto_l, "Taso": "Punainen"}
             ])
             
-            # Vahvistettu keltainen (#e6b800) parantamaan luettavuutta valkoisella taustalla
             tausta_lampo = alt.Chart(vyohykkeet_lampo).mark_rect(opacity=0.07).encode(
                 y=alt.Y('aloitus:Q', scale=alt.Scale(domain=[lattia_l, katto_l], zero=False)), y2='lopetus:Q',
                 color=alt.Color('Taso:N', scale=alt.Scale(
@@ -443,19 +440,21 @@ if yr_json:
 
             st.altair_chart(alt.layer(tausta_lampo, viiva_lampo).resolve_scale(color='independent'), use_container_width=True)
 
-        # 1. KESKITUULEN SKAALAUS (SELITTEET SIIVOTTU)
+        # 1. KESKITUULEN SKAALAUS (KORJATTU TUMMEMPI KELTAINEN TAUSTA)
         maksimi_keski = float(df_suodatettu["Tuuli"].max()) if not df_suodatettu["Tuuli"].empty else 0.0
         keski_katto = max(10.0, math.ceil(maksimi_keski + 2.0))
 
         vyohykkeet_keski = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Rajat": "Vihreä"},
-            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Rajat": "Oranssi"},
-            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Rajat": "Punainen"}
+            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Rajat": "Sinivihreä"},
+            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Rajat": "Kullankeltainen"},
+            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Rajat": "Varoituspunainen"}
         ])
-        # Asetettu legend=None poistamaan turhat "Rajat"-tekstit ja pallerot
         tausta_keski = alt.Chart(vyohykkeet_keski).mark_rect(opacity=0.06).encode(
             y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, keski_katto], zero=True)), y2='lopetus:Q',
-            color=alt.Color('Rajat:N', scale=alt.Scale(domain=["Vihreä", "Oranssi", "Punainen"], range=["green", "orange", "red"]), legend=None)
+            color=alt.Color('Rajat:N', scale=alt.Scale(
+                domain=["Sinivihreä", "Kullankeltainen", "Varoituspunainen"], 
+                range=["#2ca02c", "#e6b800", "#d62728"]
+            ), legend=None)
         )
 
         st.write("**💨 Keskituulen nopeus**")
@@ -468,18 +467,21 @@ if yr_json:
         ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(tausta_keski, keski_chart).resolve_scale(color='independent'), use_container_width=True)
 
-        # 2. TUULEN PUUSKIEN SKAALAUS (SELITTEET SIIVOTTU)
+        # 2. TUULEN PUUSKIEN SKAALAUS (KORJATTU TUMMEMPI KELTAINEN TAUSTA)
         maksimi_puuska = float(df_suodatettu["Tuulen puuska"].max()) if not df_suodatettu["Tuulen puuska"].empty else 0.0
         puuska_katto = max(15.0, math.ceil(maksimi_puuska + 2.0))
 
         vyohykkeet_puuska = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Rajat": "Vihreä"},
-            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Rajat": "Oranssi"},
-            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Rajat": "Punainen"}
+            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Rajat": "Sinivihreä"},
+            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Rajat": "Kullankeltainen"},
+            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Rajat": "Varoituspunainen"}
         ])
         tausta_puuska = alt.Chart(vyohykkeet_puuska).mark_rect(opacity=0.06).encode(
             y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, puuska_katto], zero=True)), y2='lopetus:Q',
-            color=alt.Color('Rajat:N', scale=alt.Scale(domain=["Vihreä", "Oranssi", "Punainen"], range=["green", "orange", "red"]), legend=None)
+            color=alt.Color('Rajat:N', scale=alt.Scale(
+                domain=["Sinivihreä", "Kullankeltainen", "Varoituspunainen"], 
+                range=["#2ca02c", "#e6b800", "#d62728"]
+            ), legend=None)
         )
 
         st.write("**🌪️ Tuulen puuskat**")
