@@ -385,13 +385,14 @@ if yr_json:
             st.write("**Ilmanpaineen ja Lämpötilan yhteiskuvaaja**")
             pohja = alt.Chart(df_suodatettu).encode(x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)))
             
-            # Ilmanpaine (Mallikohtaiset värit, yhtenäinen viiva)
+            # Ilmanpaine (Mallikohtaiset värit, yhtenäinen viiva, sidottu selite)
             linja_paine = pohja.mark_line(strokeWidth=2, interpolate="monotone").encode(
                 y=alt.Y("Ilmanpaine:Q", title="Ilmanpaine (hPa)", scale=alt.Scale(zero=False)),
                 color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Ilmanpaine:Q")]
             )
-            # Lämpötila (Pakotettu erottuvaksi tummanharmaaksi katkoviivaksi)
+            # Lämpötila (Pakotettu kontrastiväriksi, katkoviiva)
             linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3], color="#444444", interpolate="monotone").encode(
                 y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(zero=False)),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q")]
@@ -399,7 +400,7 @@ if yr_json:
             st.altair_chart(alt.layer(linja_paine, linja_lampo).resolve_scale(y='independent').properties(height=300).interactive(bind_y=False), use_container_width=True)
             st.caption("💡 Väriviiva = Ilmanpaine (vasen akseli) | Tumma katkoviiva = Lämpötila (oikea akseli)")
         else:
-            # --- ERILTISET KUVAAJAT ---
+            # --- ERILLISET KUVAAJAT ---
             st.write("**Ilmanpaineen kehitys**")
             chart_paine = alt.Chart(df_suodatettu).mark_line(strokeWidth=2, interpolate="monotone").encode(
                 x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
@@ -418,17 +419,18 @@ if yr_json:
             lattia_l = min(15.0, math.floor(minimi_l - 2.0))
 
             vyohykkeet_lampo = pd.DataFrame([
-                {"aloitus": lattia_l, "lopetus": min(20.0, katto_l), "Taso": "Haalean sininen (<20°C)"},
-                {"aloitus": max(lattia_l, 20.0), "lopetus": min(25.0, katto_l), "Taso": "Haalean keltainen (20-25°C)"},
-                {"aloitus": max(lattia_l, 25.0), "lopetus": katto_l, "Taso": "Haalean punainen (>25°C)"}
+                {"aloitus": lattia_l, "lopetus": min(20.0, katto_l), "Taso": "Sininen"},
+                {"aloitus": max(lattia_l, 20.0), "lopetus": min(25.0, katto_l), "Taso": "Keltainen"},
+                {"aloitus": max(lattia_l, 25.0), "lopetus": katto_l, "Taso": "Punainen"}
             ])
             
+            # Vahvistettu keltainen (#e6b800) parantamaan luettavuutta valkoisella taustalla
             tausta_lampo = alt.Chart(vyohykkeet_lampo).mark_rect(opacity=0.07).encode(
                 y=alt.Y('aloitus:Q', scale=alt.Scale(domain=[lattia_l, katto_l], zero=False)), y2='lopetus:Q',
                 color=alt.Color('Taso:N', scale=alt.Scale(
-                    domain=["Haalean sininen (<20°C)", "Haalean keltainen (20-25°C)", "Haalean punainen (>25°C)"], 
-                    range=["#1f77b4", "#ffcc00", "#d62728"]
-                ), legend=None) # Piilotetaan taustavärityksen oma selite kokonaan
+                    domain=["Sininen", "Keltainen", "Punainen"], 
+                    range=["#1f77b4", "#e6b800", "#d62728"]
+                ), legend=None)
             )
 
             viiva_lampo = alt.Chart(df_suodatettu).mark_line(strokeWidth=2, interpolate="monotone").encode(
@@ -441,18 +443,19 @@ if yr_json:
 
             st.altair_chart(alt.layer(tausta_lampo, viiva_lampo).resolve_scale(color='independent'), use_container_width=True)
 
-        # 1. KESKITUULEN SKAALAUS
+        # 1. KESKITUULEN SKAALAUS (SELITTEET SIIVOTTU)
         maksimi_keski = float(df_suodatettu["Tuuli"].max()) if not df_suodatettu["Tuuli"].empty else 0.0
         keski_katto = max(10.0, math.ceil(maksimi_keski + 2.0))
 
         vyohykkeet_keski = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Rajat": "0–9 m/s"},
-            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Rajat": "9–13 m/s"},
-            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Rajat": ">13 m/s"}
+            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Rajat": "Vihreä"},
+            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Rajat": "Oranssi"},
+            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Rajat": "Punainen"}
         ])
+        # Asetettu legend=None poistamaan turhat "Rajat"-tekstit ja pallerot
         tausta_keski = alt.Chart(vyohykkeet_keski).mark_rect(opacity=0.06).encode(
             y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, keski_katto], zero=True)), y2='lopetus:Q',
-            color=alt.Color('Rajat:N', title="Rajat", scale=alt.Scale(domain=["0–9 m/s", "9–13 m/s", ">13 m/s"], range=["green", "orange", "red"]))
+            color=alt.Color('Rajat:N', scale=alt.Scale(domain=["Vihreä", "Oranssi", "Punainen"], range=["green", "orange", "red"]), legend=None)
         )
 
         st.write("**💨 Keskituulen nopeus**")
@@ -465,18 +468,18 @@ if yr_json:
         ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(tausta_keski, keski_chart).resolve_scale(color='independent'), use_container_width=True)
 
-        # 2. TUULEN PUUSKIEN SKAALAUS
+        # 2. TUULEN PUUSKIEN SKAALAUS (SELITTEET SIIVOTTU)
         maksimi_puuska = float(df_suodatettu["Tuulen puuska"].max()) if not df_suodatettu["Tuulen puuska"].empty else 0.0
         puuska_katto = max(15.0, math.ceil(maksimi_puuska + 2.0))
 
         vyohykkeet_puuska = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Rajat": "0–9 m/s"},
-            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Rajat": "9–13 m/s"},
-            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Rajat": ">13 m/s"}
+            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Rajat": "Vihreä"},
+            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Rajat": "Oranssi"},
+            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Rajat": "Punainen"}
         ])
         tausta_puuska = alt.Chart(vyohykkeet_puuska).mark_rect(opacity=0.06).encode(
             y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, puuska_katto], zero=True)), y2='lopetus:Q',
-            color=alt.Color('Rajat:N', title="Rajat", scale=alt.Scale(domain=["0–9 m/s", "9–13 m/s", ">13 m/s"], range=["green", "orange", "red"]))
+            color=alt.Color('Rajat:N', scale=alt.Scale(domain=["Vihreä", "Oranssi", "Punainen"], range=["green", "orange", "red"]), legend=None)
         )
 
         st.write("**🌪️ Tuulen puuskat**")
