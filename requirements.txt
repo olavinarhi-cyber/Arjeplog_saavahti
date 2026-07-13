@@ -5,3 +5,4 @@ altair
 folium
 streamlit-folium
 psycopg2-binary
+fmiopendata
