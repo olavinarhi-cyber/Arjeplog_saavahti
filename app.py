@@ -148,18 +148,14 @@ def hae_ensisijainen_data(url_y):
 
 yr_json = hae_ensisijainen_data(url_yr)
 
-# FUNKTIO KANSALLISEN DATAN HAKUUN JA KORJATTUUN PARSINTAAN
+# FUNKTIO KANSALLISEN DATAN HAKUUN JA PARSINTAAN
 @st.cache_data(ttl=600)
 def hae_kansallinen_data(lat, lon, paikka_nimi):
     df_ennuste = pd.DataFrame()
     df_historia_kantaan = pd.DataFrame()
 
     if PAIKAT[paikka_nimi]["maa"] == "SE":
-        # --- RUOTSI: SMHI ---
-        # HUOM: SMHI lopetti vanhan PMP3G v2 -rajapinnan käytön 31.3.2026 (palauttaa nyt HTTP 404).
-        # Tilalle tuli SNOW1g v1, jonka rakenne on erilainen: litteä "data"-olio parametrien
-        # "parameters"-listan sijaan, aikakenttä "time" (ei "validTime") ja tuntemattomat arvot
-        # merkitään sentinel-arvolla 9999, joka pitää suodattaa pois.
+        # --- RUOTSI: SMHI (SNOW1g v1) ---
         try:
             url_smhi = f"https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/{lon:.4f}/lat/{lat:.4f}/data.json"
             res = requests.get(url_smhi, timeout=10)
@@ -174,7 +170,6 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                     
                     def hae_arvo(avain, oletus):
                         arvo = d.get(avain, oletus)
-                        # 9999 (ja siihen verrattavat puuttuvan tiedon merkit) tarkoittavat "ei tietoa"
                         if arvo is None or arvo == 9999:
                             return oletus
                         return float(arvo)
@@ -202,13 +197,11 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
         except Exception as e:
             st.sidebar.warning(f"SMHI virhe: {e}")
     else:
-        # --- SUOMI: FMI OPENDATA NUMEERISUUS- JA INTERPOLOINTIKORJAUS ---
+        # --- SUOMI: FMI OPENDATA ---
         try:
             paikka_str = f"latlon={lat:.4f},{lon:.4f}"
             nyt_utc = datetime.now(zoneinfo.ZoneInfo("UTC"))
             start_t = nyt_utc.strftime("%Y-%m-%dT%H:00:00Z")
-            # Harmonie (MEPS) -mallin ennustepituus on aina 66 tuntia riippumatta siitä mitä
-            # pyydetään - oletuksena rajapinta palauttaa vain 50h, joten pyydetään koko 66h.
             end_t = (nyt_utc + timedelta(hours=66)).strftime("%Y-%m-%dT%H:00:00Z")
             
             fmi_data = download_stored_query(
@@ -224,17 +217,6 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                 fmi_ajat = [pd.Timestamp(t).tz_localize('UTC').tz_convert(aikavyohyke).tz_localize(None) for t in fmi_ajat_raw]
                 
                 if fmi_ajat:
-                    # HUOM: fmiopendata hakee jokaiselle parametrikoodille (esim. "Temperature")
-                    # ihmisluettavan nimen FMI:n meta-rajapinnasta, ja se nimi EI ole sama kuin
-                    # koodi - se on avain dataan, ei koodi! Oikeat nimet (tarkistettu suoraan
-                    # https://opendata.fmi.fi/meta?observableProperty=forecast -vastauksesta):
-                    #   Temperature -> "Air temperature", Pressure -> "Air pressure",
-                    #   PrecipitationAmount -> "Precipitation amount", WindSpeedMS -> "Wind speed",
-                    #   WindGust -> "Wind gust"
-                    # Vanhat avaimet ("Temperature", "Pressure", jne.) eivät koskaan täsmänneet,
-                    # joten .get() palautti aina oletusarvon (None-lista) -> kaikki arvot
-                    # pyöristyivät nollaksi täytössä (fillna(0.0)), mikä näkyi tasaisena
-                    # nollaviivana ja rikkoi ilmanpainegraafin skaalauksen.
                     df_fmi_raaka = pd.DataFrame({
                         "Aika": fmi_ajat,
                         "Lämpötila": asema_data.get("Air temperature", {}).get("values", [None]*len(fmi_ajat)),
@@ -244,7 +226,6 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                         "Tuulen puuska": asema_data.get("Wind gust", {}).get("values", asema_data.get("Wind speed", {}).get("values", [None]*len(fmi_ajat))),
                     })
                     
-                    # KORJAUS: Pakotetaan sarakkeet numeerisiksi (object -> float) ennen interpolointia
                     numeeriset = ["Lämpötila", "Ilmanpaine", "Tuuli", "Tuulen puuska", "Sademäärä"]
                     for col in numeeriset:
                         df_fmi_raaka[col] = pd.to_numeric(df_fmi_raaka[col], errors='coerce')
@@ -253,8 +234,12 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                     df_ennuste = pd.DataFrame({"Aika": tunti_ruudukko})
                     df_ennuste = pd.merge(df_ennuste, df_fmi_raaka, on="Aika", how="left")
                     
-                    # Nyt interpolointi onnistuu ongelmitta numeerisille tyypeille
+                    # Interpoloidaan kumulatiivinen käyrä pehmeästi tunneille
                     df_ennuste[numeeriset] = df_ennuste[numeeriset].interpolate(method="linear").fillna(0.0)
+                    
+                    # PÄIVITYS: Muunnetaan FMI:n kumulatiivinen sademäärä tuntikohtaiseksi erotukseksi (mm/h)
+                    df_ennuste["Sademäärä"] = df_ennuste["Sademäärä"].diff().fillna(0.0).clip(lower=0.0)
+                    
                     df_ennuste["Malli"] = "FMI Ennuste"
                     df_ennuste["Sadetodennäköisyys"] = 0.0
         except Exception as e:
@@ -387,7 +372,7 @@ if yr_json:
         )
 
     if PAIKAT[valittu_paikka]["maa"] == "FI":
-        st.caption("ℹ️ FMI:n Harmonie (MEPS) -malli ennustaa vain n. 66 tuntia (~2,75 vrk) eteenpäin - tämän jälkeen kuvaajissa näkyy vain Yr.no:n pidempi ennuste.")
+        st.caption("ℹ️ FMI:n Harmonie (MEPS) -malli ennusteaika rajoittuu n. 66 tuntiin – tämän jälkeen kuvaajissa jatkuu vain Yr.no:n pidempi ennuste.")
 
     if valittu_malli == "Vain Yr.no":
         df_suodatettu = df_suodatettu_pohja[df_suodatettu_pohja["Malli"].isin(["Toteutunut", "Yr.no Ennuste"])]
