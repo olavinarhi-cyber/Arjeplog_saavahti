@@ -205,11 +205,15 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
         # --- SUOMI: FMI OPENDATA NUMEERISUUS- JA INTERPOLOINTIKORJAUS ---
         try:
             paikka_str = f"latlon={lat:.4f},{lon:.4f}"
-            start_t = datetime.now(zoneinfo.ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:00:00Z")
+            nyt_utc = datetime.now(zoneinfo.ZoneInfo("UTC"))
+            start_t = nyt_utc.strftime("%Y-%m-%dT%H:00:00Z")
+            # Harmonie (MEPS) -mallin ennustepituus on aina 66 tuntia riippumatta siitä mitä
+            # pyydetään - oletuksena rajapinta palauttaa vain 50h, joten pyydetään koko 66h.
+            end_t = (nyt_utc + timedelta(hours=66)).strftime("%Y-%m-%dT%H:00:00Z")
             
             fmi_data = download_stored_query(
                 "fmi::forecast::harmonie::surface::point::multipointcoverage",
-                args=[paikka_str, f"starttime={start_t}", "timeseries=True"]
+                args=[paikka_str, f"starttime={start_t}", f"endtime={end_t}", "timeseries=True"]
             )
             
             if fmi_data and fmi_data.data:
@@ -220,13 +224,24 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                 fmi_ajat = [pd.Timestamp(t).tz_localize('UTC').tz_convert(aikavyohyke).tz_localize(None) for t in fmi_ajat_raw]
                 
                 if fmi_ajat:
+                    # HUOM: fmiopendata hakee jokaiselle parametrikoodille (esim. "Temperature")
+                    # ihmisluettavan nimen FMI:n meta-rajapinnasta, ja se nimi EI ole sama kuin
+                    # koodi - se on avain dataan, ei koodi! Oikeat nimet (tarkistettu suoraan
+                    # https://opendata.fmi.fi/meta?observableProperty=forecast -vastauksesta):
+                    #   Temperature -> "Air temperature", Pressure -> "Air pressure",
+                    #   PrecipitationAmount -> "Precipitation amount", WindSpeedMS -> "Wind speed",
+                    #   WindGust -> "Wind gust"
+                    # Vanhat avaimet ("Temperature", "Pressure", jne.) eivät koskaan täsmänneet,
+                    # joten .get() palautti aina oletusarvon (None-lista) -> kaikki arvot
+                    # pyöristyivät nollaksi täytössä (fillna(0.0)), mikä näkyi tasaisena
+                    # nollaviivana ja rikkoi ilmanpainegraafin skaalauksen.
                     df_fmi_raaka = pd.DataFrame({
                         "Aika": fmi_ajat,
-                        "Lämpötila": asema_data.get("Temperature", {}).get("values", [None]*len(fmi_ajat)),
-                        "Ilmanpaine": [p / 100.0 if (p and p > 50000) else p for p in asema_data.get("Pressure", {}).get("values", [None]*len(fmi_ajat))],
-                        "Sademäärä": asema_data.get("PrecipitationAmount", {}).get("values", [None]*len(fmi_ajat)),
-                        "Tuuli": asema_data.get("WindSpeedMS", {}).get("values", [None]*len(fmi_ajat)),
-                        "Tuulen puuska": asema_data.get("WindGust", {}).get("values", asema_data.get("WindSpeedMS", {}).get("values", [None]*len(fmi_ajat))),
+                        "Lämpötila": asema_data.get("Air temperature", {}).get("values", [None]*len(fmi_ajat)),
+                        "Ilmanpaine": [p / 100.0 if (p and p > 50000) else p for p in asema_data.get("Air pressure", {}).get("values", [None]*len(fmi_ajat))],
+                        "Sademäärä": asema_data.get("Precipitation amount", {}).get("values", [None]*len(fmi_ajat)),
+                        "Tuuli": asema_data.get("Wind speed", {}).get("values", [None]*len(fmi_ajat)),
+                        "Tuulen puuska": asema_data.get("Wind gust", {}).get("values", asema_data.get("Wind speed", {}).get("values", [None]*len(fmi_ajat))),
                     })
                     
                     # KORJAUS: Pakotetaan sarakkeet numeerisiksi (object -> float) ennen interpolointia
@@ -370,6 +385,9 @@ if yr_json:
             ["Erilliset kuvaajat", "Yhdistä Lämpö & Paine"], 
             horizontal=True
         )
+
+    if PAIKAT[valittu_paikka]["maa"] == "FI":
+        st.caption("ℹ️ FMI:n Harmonie (MEPS) -malli ennustaa vain n. 66 tuntia (~2,75 vrk) eteenpäin - tämän jälkeen kuvaajissa näkyy vain Yr.no:n pidempi ennuste.")
 
     if valittu_malli == "Vain Yr.no":
         df_suodatettu = df_suodatettu_pohja[df_suodatettu_pohja["Malli"].isin(["Toteutunut", "Yr.no Ennuste"])]
