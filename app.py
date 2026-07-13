@@ -121,7 +121,7 @@ tanaan = date.today()
 alku_pvm = st.sidebar.date_input("Alkupäivä", tanaan - timedelta(days=2))
 loppu_pvm = st.sidebar.date_input("Loppupäivä", tanaan + timedelta(days=7))
 
-# 4. RAJAPINTOJEN HAKU (Yr.no pysyy kaikkialla)
+# 4. RAJAPINTOJEN HAKU
 nyt_dt = datetime.now().replace(minute=0, second=0, microsecond=0)
 headers = {'User-Agent': 'KalastusSaavahti/1.0 (opiskelu/harrastusprojekti)'}
 aikavyohyke_nimi = "Europe/Stockholm" if "Arjeplog" in valittu_paikka else "Europe/Helsinki"
@@ -135,110 +135,108 @@ def hae_ensisijainen_data(url_y):
 
 yr_json = hae_ensisijainen_data(url_yr)
 
-# FUNKTIO FMI & SMHI DATAN PARSINTAAN JA HAKUUN
+# FUNKTIO KANSALLISEN DATAN HAKUUN JA KORJATTUUN PARSINTAAN
 @st.cache_data(ttl=600)
 def hae_kansallinen_data(lat, lon, paikka_nimi):
     df_ennuste = pd.DataFrame()
     df_historia_kantaan = pd.DataFrame()
 
     if "Arjeplog" in paikka_nimi:
-        # --- RUOTSI: SMHI SNOW1g-ENNUSTE ---
+        # --- RUOTSI: SMHI PISTE-ENNUSTEEN PARSINTAKORJAUS ---
         try:
-            url_smhi = f"https://opendata-download-metfcst.smhi.se/api/category/snow1g/version/1/geotype/point/lon/{lon:.4f}/lat/{lat:.4f}/data.json"
-            res = requests.get(url_smhi)
+            url_smhi = f"https://opendata-download-metfcst.smhi.se/api/category/pmp3g/version/2/geotype/point/lon/{lon:.4f}/lat/{lat:.4f}/data.json"
+            res = requests.get(url_smhi, timeout=10)
             if res.status_code == 200:
                 data = res.json()
                 ajat, lammat, paineet, tuulet, puuskat, sade = [], [], [], [], [], []
+                
                 for entry in data.get("timeSeries", []):
-                    # SMHI SNOW1g käyttää uutta suoraa nimeämistä
-                    d = entry.get("data", {})
-                    t_val = d.get("air_temperature", 0.0)
-                    p_val = d.get("air_pressure_at_mean_sea_level", 1013.25)
-                    w_val = d.get("wind_speed", 0.0)
-                    g_val = d.get("wind_gust_speed", w_val)
-                    # pmean on keskimääräinen sademäärä
-                    r_val = d.get("precipitation_amount_mean", 0.0)
-
-                    if t_val != 9999 and p_val != 9999: # Ohitetaan sentinelliarvot
-                        ajat.append(entry["time"])
-                        lammat.append(t_val)
-                        paineet.append(p_val)
-                        tuulet.append(w_val)
-                        puuskat.append(g_val)
-                        sade.append(r_val)
-                
-                df_ennuste = pd.DataFrame({
-                    "Aika": pd.to_datetime(ajat).tz_convert(aikavyohyke_nimi).dt.tz_localize(None),
-                    "Lämpötila": lammat, "Ilmanpaine": paineet, "Sademäärä": sade, "Tuuli": tuulet,
-                    "Tuulen puuska": puuskat, "Malli": "SMHI Ennuste", "Sadetodennäköisyys": 0.0
-                })
-        except Exception:
-            pass
-    else:
-        # --- SUOMI: FMI OPENDATA (HARMONIE ENNUSTE) ---
-        try:
-            # Ennustehaku
-            paikka_str = f"latlon={lat:.4f},{lon:.4f}"
-            start_t = datetime.now(zoneinfo.ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:00:00Z")
-            end_t = (datetime.now(zoneinfo.ZoneInfo("UTC")) + timedelta(days=10)).strftime("%Y-%m-%dT%H:00:00Z")
-            
-            fmi_data = download_stored_query("fmi::forecast::harmonie::surface::point::multipointcoverage",
-                                             args=[paikka_str, f"starttime={start_t}", f"endtime={end_t}"])
-            
-            if fmi_data and fmi_data.data:
-                latest_loc = list(fmi_data.data.keys())[0]
-                ts_dict = fmi_data.data[latest_loc]["timeseries"]
-                
-                ajat, lammat, paineet, tuulet, puuskat, sade = [], [], [], [], [], []
-                for dt_key, params in ts_dict.items():
-                    # FMI palauttaa UTC-aikoja datassa
-                    dt_utc = dt_key.replace(tzinfo=zoneinfo.ZoneInfo("UTC"))
-                    dt_local = dt_utc.astimezone(zoneinfo.ZoneInfo(aikavyohyke_nimi)).replace(tzinfo=None)
+                    aika = pd.to_datetime(entry["validTime"]).tz_convert(aikavyohyke_nimi).dt.tz_localize(None)
                     
-                    ajat.append(dt_local)
-                    lammat.append(params.get("Temperature", {}).get("value", 0.0))
-                    # FMI paine voi tulla pascaleina tai uupuva, korjataan hPa
-                    p_val = params.get("Pressure", {}).get("value", 101325.0)
-                    paineet.append(p_val / 100.0 if p_val > 50000 else p_val)
-                    tuulet.append(params.get("WindSpeedMS", {}).get("value", 0.0))
-                    puuskat.append(params.get("WindGust", {}).get("value", params.get("WindSpeedMS", {}).get("value", 0.0)))
-                    sade.append(params.get("PrecipitationAmount", {}).get("value", 0.0))
+                    t_val, p_val, w_val, g_val, r_val = 0.0, 1013.25, 0.0, 0.0, 0.0
+                    for param in entry.get("parameters", []):
+                        p_name = param.get("name")
+                        p_values = param.get("values", [0.0])
+                        if p_name == "t": t_val = float(p_values[0])
+                        elif p_name == "msl": p_val = float(p_values[0])
+                        elif p_name == "ws": w_val = float(p_values[0])
+                        elif p_name == "gust": g_val = float(p_values[0])
+                        elif p_name == "pmean": r_val = float(p_values[0])
+                    
+                    ajat.append(aika)
+                    lammat.append(t_val)
+                    paineet.append(p_val)
+                    tuulet.append(w_val)
+                    puuskat.append(max(w_val, g_val))
+                    sade.append(r_val)
                 
                 df_ennuste = pd.DataFrame({
                     "Aika": ajat, "Lämpötila": lammat, "Ilmanpaine": paineet, "Sademäärä": sade,
-                    "Tuuli": tuulet, "Tuulen puuska": puuskat, "Malli": "FMI Ennuste", "Sadetodennäköisyys": 0.0
+                    "Tuuli": tuulet, "Tuulen puuska": puuskat, "Malli": "SMHI Ennuste", "Sadetodennäköisyys": 0.0
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            st.sidebar.warning(f"SMHI virhe: {e}")
+    else:
+        # --- SUOMI: FMI OPENDATA TIMESERIES=TRUE KORJAUS ---
+        try:
+            paikka_str = f"latlon={lat:.4f},{lon:.4f}"
+            start_t = datetime.now(zoneinfo.ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:00:00Z")
+            
+            # Luetaan ennustetiedot käyttäen timeseries=True -vipua
+            fmi_data = download_stored_query(
+                "fmi::forecast::harmonie::surface::point::multipointcoverage",
+                args=[paikka_str, f"starttime={start_t}", "timeseries=True"]
+            )
+            
+            if fmi_data and fmi_data.data:
+                # Otetaan ensimmäinen FMI:n palauttama havintoaseman/koordinaatin avain
+                eka_asema = list(fmi_data.data.keys())[0]
+                asema_data = fmi_data.data[eka_asema]
+                
+                # FMI:n palauttamat aikaleimat listana
+                fmi_ajat_raw = asema_data.get("times", [])
+                fmi_ajat = [pd.to_datetime(t).astimezone(zoneinfo.ZoneInfo(aikavyohyke_nimi)).replace(tzinfo=None) for t in fmi_ajat_raw]
+                
+                df_ennuste = pd.DataFrame({
+                    "Aika": fmi_ajat,
+                    "Lämpötila": asema_data.get("Temperature", {}).get("values", [0.0]*len(fmi_ajat)),
+                    "Ilmanpaine": [p / 100.0 if p > 50000 else p for p in asema_data.get("Pressure", {}).get("values", [101325.0]*len(fmi_ajat))],
+                    "Sademäärä": asema_data.get("PrecipitationAmount", {}).get("values", [0.0]*len(fmi_ajat)),
+                    "Tuuli": asema_data.get("WindSpeedMS", {}).get("values", [0.0]*len(fmi_ajat)),
+                    "Tuulen puuska": asema_data.get("WindGust", {}).get("values", asema_data.get("WindSpeedMS", {}).get("values", [0.0]*len(fmi_ajat))),
+                    "Malli": "FMI Ennuste", "Sadetodennäköisyys": 0.0
+                })
+        except Exception as e:
+            st.sidebar.warning(f"FMI ennustevirhe: {e}")
 
-        # --- SUOMI: FMI TOTEUTUNEET HAVAINNOT (PILVEEN) ---
+        # --- SUOMI: FMI TOTEUTUNEET HAVAINNOT TIMESERIES=TRUE KORJAUS ---
         try:
             hist_start = (datetime.now(zoneinfo.ZoneInfo("UTC")) - timedelta(days=3)).strftime("%Y-%m-%dT%H:00:00Z")
             hist_end = datetime.now(zoneinfo.ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:00:00Z")
             
-            fmi_hist = download_stored_query("fmi::observations::weather::multipointcoverage",
-                                             args=[paikka_str, f"starttime={hist_start}", f"endtime={hist_end}"])
+            fmi_hist = download_stored_query(
+                "fmi::observations::weather::multipointcoverage",
+                args=[paikka_str, f"starttime={hist_start}", f"endtime={hist_end}", "timeseries=True"]
+            )
+            
             if fmi_hist and fmi_hist.data:
-                latest_loc = list(fmi_hist.data.keys())[0]
-                ts_dict = fmi_hist.data[latest_loc]["timeseries"]
+                eka_asema = list(fmi_hist.data.keys())[0]
+                asema_hist = fmi_hist.data[eka_asema]
                 
-                h_ajat, h_lammat, h_paineet, h_tuulet, h_sade = [], [], [], [], []
-                for dt_key, params in ts_dict.items():
-                    dt_utc = dt_key.replace(tzinfo=zoneinfo.ZoneInfo("UTC"))
-                    dt_local = dt_utc.astimezone(zoneinfo.ZoneInfo(aikavyohyke_nimi)).replace(tzinfo=None)
-                    
-                    h_ajat.append(dt_local)
-                    h_lammat.append(params.get("t2m", {}).get("value", 0.0)) # Ilman lämpötila
-                    h_paineet.append(params.get("p_sea", {}).get("value", 1013.25)) # Merenpinnan paine
-                    h_tuulet.append(params.get("ws_10min", {}).get("value", 0.0)) # Keskituuli
-                    h_sade.append(max(0.0, params.get("r_1h", {}).get("value", 0.0))) # Sademäärä
-                    
+                h_ajat_raw = asema_hist.get("times", [])
+                h_ajat = [pd.to_datetime(t).astimezone(zoneinfo.ZoneInfo(aikavyohyke_nimi)).replace(tzinfo=None) for t in h_ajat_raw]
+                
                 df_historia_kantaan = pd.DataFrame({
-                    "Aika": h_ajat, "Lämpötila": h_lammat, "Ilmanpaine": h_paineet, "Sademäärä": h_sade,
-                    "Tuuli": h_tuulet, "Tuulen puuska": h_tuulet, "Malli": "Toteutunut", "Sadetodennäköisyys": 0.0
+                    "Aika": h_ajat,
+                    "Lämpötila": asema_hist.get("Air temperature", {}).get("values", [0.0]*len(h_ajat)),
+                    "Ilmanpaine": asema_hist.get("Pressure (msl)", {}).get("values", [1013.25]*len(h_ajat)),
+                    "Sademäärä": [max(0.0, r) for r in asema_hist.get("Precipitation amount", {}).get("values", [0.0]*len(h_ajat))],
+                    "Tuuli": asema_hist.get("Wind speed", {}).get("values", [0.0]*len(h_ajat)),
+                    "Tuulen puuska": asema_hist.get("Gust speed", {}).get("values", asema_hist.get("Wind speed", {}).get("values", [0.0]*len(h_ajat))),
+                    "Malli": "Toteutunut", "Sadetodennäköisyys": 0.0
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            st.sidebar.warning(f"FMI havintovirhe: {e}")
             
     return df_ennuste, df_historia_kantaan
 
@@ -263,8 +261,7 @@ if yr_json:
     df_yr["Aika"] = df_yr["Aika"].dt.tz_localize(None)
     df_yr_tuleva = df_yr[df_yr["Aika"] >= nyt_dt].copy()
 
-    # --- HISTORIA TALLENNUS TIETOKANTAAN ---
-    # Jos saatiin kerättyä FMI/SMHI mitattua historiaa, tallennetaan se pilvikantaan
+    # --- HISTORIAN TALLENNUS TIETOKANTAAN ---
     if not df_kansallinen_mennyt.empty:
         uusia_tallennettu = tallenna_toteutunut_data(df_kansallinen_mennyt[df_kansallinen_mennyt["Aika"] < nyt_dt], valittu_paikka)
 
@@ -275,7 +272,7 @@ if yr_json:
     if not df_yr_tuleva.empty:
         paine_nyt = df_yr_tuleva.iloc[0]['Ilmanpaine']
         
-        # 3 VRK (72h) ENNUSTETRENDIN LASKENTA pelkästä Yr.no:sta
+        # 3 VRK ENNUSTETRENDI
         kolme_paivaa_eteenpain = nyt_dt + timedelta(hours=72)
         df_tuleva_paine = df_yr_tuleva[df_yr_tuleva["Aika"] == kolme_paivaa_eteenpain]
         paine_suunta = "— tasainen 3vrk"
@@ -429,7 +426,7 @@ if yr_json:
         maksimi_sade = float(df_suodatettu["Sademäärä"].max())
         sade_katto = max(2.0, maksimi_sade + 0.5)
 
-        st.write("**🌧️ Sademäärä (mm/h) & Sadeprosentti**")
+        st.write("**🌧️ Sademäärä (mm/h)**")
         sade_kuvaaja = alt.Chart(df_suodatettu).mark_bar(opacity=0.6).encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
             y=alt.Y("Sademäärä:Q", title="Sademäärä (mm)", scale=alt.Scale(domain=[0, sade_katto], zero=True)),
