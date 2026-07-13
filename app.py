@@ -170,14 +170,17 @@ if yr_json and om_json:
     
     # 5. TILANNEHUONE & MOBIILITIIVISTELMÄ
     if not df_yr_tuleva.empty:
-        tuntia_sitten = nyt_dt - timedelta(hours=3)
         paine_nyt = df_yr_tuleva.iloc[0]['Ilmanpaine']
-        df_paine_hist = df_historia[df_historia["Aika"] == tuntia_sitten]
-        paine_suunta = "— tasainen"
-        if not df_paine_hist.empty:
-            vanha_paine = df_paine_hist.iloc[0]['Ilmanpaine']
-            if paine_nyt > vanha_paine + 0.5: paine_suunta = "↗ NOUSEVA (Keli paranee)"
-            elif paine_nyt < vanha_paine - 0.5: paine_suunta = "↘ LASKEVA (Kala aktivoituu)"
+        
+        # 3 VRK (72h) ENNUSTETRENDIN LASKENTA
+        kolme_paivaa_eteenpäin = nyt_dt + timedelta(hours=72)
+        df_tuleva_paine = df_yr_tuleva[df_yr_tuleva["Aika"] == kolme_paivaa_eteenpäin]
+        paine_suunta = "— tasainen 3vrk"
+        
+        if not df_tuleva_paine.empty:
+            tuleva_paine = df_tuleva_paine.iloc[0]['Ilmanpaine']
+            if tuleva_paine > paine_nyt + 4.0: paine_suunta = "↗ NOUSEVA 3vrk"
+            elif tuleva_paine < paine_nyt - 4.0: paine_suunta = "↘ LASKEVA 3vrk"
 
         st.markdown("### ⚡ Tilannehuone juuri nyt")
         c1, c2, c3 = st.columns(3)
@@ -269,9 +272,7 @@ if yr_json and om_json:
             st.write("**Lämpötilan kehitys**")
             st.altair_chart(luo_erotettu_graafi(df_suodatettu, "Lämpötila", "Lämpötila", "°C"), use_container_width=True)
 
-        # -----------------------------------------------------------------
-        # 1. KESKITUULEN SKAALAUS (Täysin itsenäinen katto keskituulen datasta)
-        # -----------------------------------------------------------------
+        # 1. KESKITUULEN SKAALAUS
         maksimi_keski = float(df_suodatettu["Tuuli"].max())
         keski_katto = max(10.0, math.ceil(maksimi_keski + 2.0))
 
@@ -294,9 +295,7 @@ if yr_json and om_json:
         ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(tausta_keski, keski_chart), use_container_width=True)
 
-        # -----------------------------------------------------------------
-        # 2. TUULEN PUUSKIEN SKAALAUS (Täysin itsenäinen katto puuskien datasta)
-        # -----------------------------------------------------------------
+        # 2. TUULEN PUUSKIEN SKAALAUS
         maksimi_puuska = float(df_suodatettu["Tuulen puuska"].max())
         puuska_katto = max(15.0, math.ceil(maksimi_puuska + 2.0))
 
@@ -319,9 +318,7 @@ if yr_json and om_json:
         ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(tausta_puuska, puuska_chart), use_container_width=True)
 
-        # -----------------------------------------------------------------
-        # 3. SADEMÄÄRÄN SKAALAUS (Nostettu 250px korkeuteen lineaarisella asteikolla)
-        # -----------------------------------------------------------------
+        # 3. SADEMÄÄRÄN SKAALAUS
         maksimi_sade = float(df_suodatettu["Sademäärä"].max())
         sade_katto = max(2.0, maksimi_sade + 0.5)
 
