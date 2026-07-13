@@ -11,9 +11,7 @@ import zoneinfo
 from streamlit_folium import st_folium
 import folium
 
-# fmiopendata-kirjaston sisäiset HTTP-kutsut (mm. parametrien nimien haku FMI:n meta-rajapinnasta,
-# noin 15-20 erillistä kutsua per ennustehaku) tehdään ilman timeoutia. Ilman tätä yksikin hidas
-# tai jumiutunut yhteys FMI:hin voi jumittaa koko Streamlit-sovelluksen ilman selkeää virheilmoitusta.
+# fmiopendata-kirjaston sisäiset HTTP-kutsut tehdään timeoutilla jumiutumisen estämiseksi.
 socket.setdefaulttimeout(15)
 
 # Tuodaan FMI-kirjasto mukaan
@@ -57,7 +55,6 @@ def laske_aurinko_paiva(pvm, lat, lon, aikavyohyke):
     nousu_utc = keskipaiva - math.degrees(tuntikulma) / 15.0
     lasku_utc = keskipaiva + math.degrees(tuntikulma) / 15.0
     
-    # Käytetään valitun paikan todellista aikavyöhykettä (huomioi myös kesä-/talviajan automaattisesti)
     nyt_utc = datetime.combine(pvm, datetime.min.time(), tzinfo=zoneinfo.ZoneInfo("UTC"))
     aikakorjaus = aikavyohyke.utcoffset(nyt_utc).total_seconds() / 3600.0
     
@@ -68,7 +65,6 @@ def laske_aurinko_paiva(pvm, lat, lon, aikavyohyke):
 # 2. PILVITIETOKANTAFUNKTIOT
 @st.cache_resource
 def hae_tietokantayhteys():
-    """Yksi uudelleenkäytettävä yhteys istunnon ajaksi, ei uutta TCP/SSL-kädenpuristusta joka rerunilla."""
     return psycopg2.connect(DB_URI, sslmode='require')
 
 def tallenna_toteutunut_data(df_tunnit, paikka_nimi):
@@ -234,10 +230,9 @@ def hae_kansallinen_data(lat, lon, paikka_nimi):
                     df_ennuste = pd.DataFrame({"Aika": tunti_ruudukko})
                     df_ennuste = pd.merge(df_ennuste, df_fmi_raaka, on="Aika", how="left")
                     
-                    # Interpoloidaan kumulatiivinen käyrä pehmeästi tunneille
                     df_ennuste[numeeriset] = df_ennuste[numeeriset].interpolate(method="linear").fillna(0.0)
                     
-                    # PÄIVITYS: Muunnetaan FMI:n kumulatiivinen sademäärä tuntikohtaiseksi erotukseksi (mm/h)
+                    # Muunnetaan FMI:n kumulatiivinen sademäärä tuntikohtaiseksi erotukseksi (mm/h)
                     df_ennuste["Sademäärä"] = df_ennuste["Sademäärä"].diff().fillna(0.0).clip(lower=0.0)
                     
                     df_ennuste["Malli"] = "FMI Ennuste"
@@ -315,7 +310,6 @@ if yr_json:
     if not df_yr_tuleva.empty:
         paine_nyt = df_yr_tuleva.iloc[0]['Ilmanpaine']
         
-        # 3 VRK ENNUSTETRENDI
         kolme_paivaa_eteenpain = nyt_dt + timedelta(hours=72)
         df_tuleva_paine = df_yr_tuleva[df_yr_tuleva["Aika"] == kolme_paivaa_eteenpain]
         paine_suunta = "— tasainen 3vrk"
@@ -394,7 +388,7 @@ if yr_json:
                     domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"],
                     range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"]
                 )),
-                strokeDash=alt.StrokeDash("Malli:N"),
+                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T", format="%d.%m. %H:%M"), alt.Tooltip(f"{y_sarake}:Q"), alt.Tooltip("Malli:N")]
             ).properties(height=300).interactive(bind_y=False)
             return chart
@@ -406,12 +400,14 @@ if yr_json:
             
             linja_paine = pohja.mark_line(strokeWidth=2, interpolate="monotone").encode(
                 y=alt.Y("Ilmanpaine:Q", title="Ilmanpaine (hPa)", scale=alt.Scale(zero=False)),
-                color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+                color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Ilmanpaine:Q")]
             )
             linja_lampo = pohja.mark_line(strokeWidth=1.5, strokeDash=[4, 3, 4, 3], interpolate="monotone").encode(
                 y=alt.Y("Lämpötila:Q", title="Lämpötila (°C)", scale=alt.Scale(zero=False)),
-                color=alt.Color("Malli:N"),
+                color=alt.Color("Malli:N", title="Datalähde"),
+                strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"),
                 tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Lämpötila:Q")]
             )
             st.altair_chart(alt.layer(linja_paine, linja_lampo).resolve_scale(y='independent').properties(height=300).interactive(bind_y=False), use_container_width=True)
@@ -427,46 +423,48 @@ if yr_json:
         keski_katto = max(10.0, math.ceil(maksimi_keski + 2.0))
 
         vyohykkeet_keski = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
-            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
-            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Väri": "Erittäin kova tuuli (>13 m/s)"}
+            {"aloitus": 0, "lopetus": min(9.0, keski_katto), "Rajat": "0–9 m/s"},
+            {"aloitus": min(9.0, keski_katto), "lopetus": min(13.0, keski_katto), "Rajat": "9–13 m/s"},
+            {"aloitus": min(13.0, keski_katto), "lopetus": keski_katto, "Rajat": ">13 m/s"}
         ])
         tausta_keski = alt.Chart(vyohykkeet_keski).mark_rect(opacity=0.06).encode(
             y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, keski_katto], zero=True)), y2='lopetus:Q',
-            color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
+            color=alt.Color('Rajat:N', title="Rajat", scale=alt.Scale(domain=["0–9 m/s", "9–13 m/s", ">13 m/s"], range=["green", "orange", "red"]))
         )
 
         st.write("**💨 Keskituulen nopeus**")
         keski_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2, interpolate="monotone").encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
             y=alt.Y("Tuuli:Q", title="Keskituuli (m/s)", scale=alt.Scale(domain=[0, keski_katto], zero=True)),
-            color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
-            strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q")]
+            color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+            strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"), 
+            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuuli:Q")]
         ).properties(height=260).interactive(bind_y=False)
-        st.altair_chart(alt.layer(tausta_keski, keski_chart), use_container_width=True)
+        st.altair_chart(alt.layer(tausta_keski, keski_chart).resolve_scale(color='independent'), use_container_width=True)
 
         # 2. TUULEN PUUSKIEN SKAALAUS
         maksimi_puuska = float(df_suodatettu["Tuulen puuska"].max()) if not df_suodatettu["Tuulen puuska"].empty else 0.0
         puuska_katto = max(15.0, math.ceil(maksimi_puuska + 2.0))
 
         vyohykkeet_puuska = pd.DataFrame([
-            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Väri": "Kohtuullinen tuuli (0-9 m/s)"},
-            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Väri": "Kova tuuli / Puuskat (9-13 m/s)"},
-            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Väri": "Erittäin kova tuuli (>13 m/s)"}
+            {"aloitus": 0, "lopetus": min(9.0, puuska_katto), "Rajat": "0–9 m/s"},
+            {"aloitus": min(9.0, puuska_katto), "lopetus": min(13.0, puuska_katto), "Rajat": "9–13 m/s"},
+            {"aloitus": min(13.0, puuska_katto), "lopetus": puuska_katto, "Rajat": ">13 m/s"}
         ])
         tausta_puuska = alt.Chart(vyohykkeet_puuska).mark_rect(opacity=0.06).encode(
             y=alt.Y('aloitus:Q', title="m/s", scale=alt.Scale(domain=[0, puuska_katto], zero=True)), y2='lopetus:Q',
-            color=alt.Color('Väri:N', title="Tuulitilanne", scale=alt.Scale(domain=["Kohtuullinen tuuli (0-9 m/s)", "Kova tuuli / Puuskat (9-13 m/s)", "Erittäin kova tuuli (>13 m/s)"], range=["green", "orange", "red"]))
+            color=alt.Color('Rajat:N', title="Rajat", scale=alt.Scale(domain=["0–9 m/s", "9–13 m/s", ">13 m/s"], range=["green", "orange", "red"]))
         )
 
         st.write("**🌪️ Tuulen puuskat**")
         puuska_chart = alt.Chart(df_suodatettu).mark_line(strokeWidth=2, interpolate="monotone").encode(
             x=alt.X("Aika:T", title="Aika", axis=alt.Axis(format="%d.%m. klo %H:%M", labelAngle=-45)),
             y=alt.Y("Tuulen puuska:Q", title="Puuska (m/s)", scale=alt.Scale(domain=[0, puuska_katto], zero=True)),
-            color=alt.Color("Malli:N", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
-            strokeDash=alt.StrokeDash("Malli:N"), tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuulen puuska:Q")]
+            color=alt.Color("Malli:N", title="Datalähde", scale=alt.Scale(domain=["Toteutunut", "Yr.no Ennuste", "FMI Ennuste", "SMHI Ennuste"], range=["#2ca02c", "#1f77b4", "#ff7f0e", "#e377c2"])),
+            strokeDash=alt.StrokeDash("Malli:N", title="Datalähde"), 
+            tooltip=[alt.Tooltip("Aika:T"), alt.Tooltip("Tuulen puuska:Q")]
         ).properties(height=260).interactive(bind_y=False)
-        st.altair_chart(alt.layer(tausta_puuska, puuska_chart), use_container_width=True)
+        st.altair_chart(alt.layer(tausta_puuska, puuska_chart).resolve_scale(color='independent'), use_container_width=True)
 
         # 3. SADEMÄÄRÄN SKAALAUS
         maksimi_sade = float(df_suodatettu["Sademäärä"].max()) if not df_suodatettu["Sademäärä"].empty else 0.0
