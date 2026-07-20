@@ -63,42 +63,48 @@ def laske_aurinko_paiva(pvm, lat, lon, aikavyohyke):
     return f"{int(nousu_tunnit):02d}:{int((nousu_tunnit%1)*60):02d}", f"{int(lasku_tunnit):02d}:{int((lasku_tunnit%1)*60):02d}"
 
 # 2. PILVITIETOKANTAFUNKTIOT
-@st.cache_resource
 def hae_tietokantayhteys():
+    """Poistettu välimuistitus, jotta saadaan aina toimiva ja tuore yhteys."""
     return psycopg2.connect(DB_URI, sslmode='require')
 
-def tallenna_toteutunut_data(df_tunnit, paikka_nimi):
+def tallenna_toteutunut_data(df_tunnit, paikka_nimi, aikavyohyke):
     try:
-        conn = hae_tietokantayhteys()
-        cursor = conn.cursor()
-        nyt_str = datetime.now().strftime("%Y-%m-%dT%H:00:00")
         riveja_lisatty = 0
+        # Korjattu aikatarkistus vastaamaan taulukon paikallisia aikoja
+        nyt_paikallinen = datetime.now(aikavyohyke).replace(tzinfo=None)
         
-        for _, row in df_tunnit.iterrows():
-            tunti_aika = row["Aika"].strftime("%Y-%m-%dT%H:00:00")
-            if tunti_aika < nyt_str:
-                lat = PAIKAT[paikka_nimi]["lat"]
-                lon = PAIKAT[paikka_nimi]["lon"]
-                cursor.execute("""
-                    INSERT INTO toteutunut_saa (aika, lat, lon, lampotila, ilmanpaine, tuuli, sade)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (aika, lat, lon) DO NOTHING
-                """, (tunti_aika, lat, lon, float(row["Lämpötila"]), float(row["Ilmanpaine"]), float(row["Tuuli"]), float(row["Sademäärä"])))
-                if cursor.rowcount > 0: riveja_lisatty += 1
-        conn.commit()
-        cursor.close()
+        with hae_tietokantayhteys() as conn:
+            with conn.cursor() as cursor:
+                for _, row in df_tunnit.iterrows():
+                    tunti_dt = row["Aika"]
+                    if tunti_dt < nyt_paikallinen:
+                        tunti_str = tunti_dt.strftime("%Y-%m-%dT%H:00:00")
+                        lat = PAIKAT[paikka_nimi]["lat"]
+                        lon = PAIKAT[paikka_nimi]["lon"]
+                        cursor.execute("""
+                            INSERT INTO toteutunut_saa (aika, lat, lon, lampotila, ilmanpaine, tuuli, sade)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (aika, lat, lon) DO NOTHING
+                        """, (tunti_str, lat, lon, float(row["Lämpötila"]), float(row["Ilmanpaine"]), float(row["Tuuli"]), float(row["Sademäärä"])))
+                        if cursor.rowcount > 0: 
+                            riveja_lisatty += 1
+                conn.commit()
         return riveja_lisatty
     except Exception as e:
-        st.sidebar.error(f"Tietokantavirhe tallennuksessa: {e}")
+        st.error(f"Tietokantavirhe tallennuksessa: {e}")
+        with st.expander("Näytä tallennuksen tekninen virhe"):
+            st.code(traceback.format_exc())
         return 0
 
 def hae_historia_tietokannasta(paikka_nimi):
     try:
-        conn = hae_tietokantayhteys()
         lat = PAIKAT[paikka_nimi]["lat"]
         lon = PAIKAT[paikka_nimi]["lon"]
         query = "SELECT aika, lampotila, ilmanpaine, tuuli, sade FROM toteutunut_saa WHERE lat = %s AND lon = %s"
-        df = pd.read_sql_query(query, conn, params=(lat, lon))
+        
+        with hae_tietokantayhteys() as conn:
+            df = pd.read_sql_query(query, conn, params=(lat, lon))
+            
         if not df.empty:
             df["Aika"] = pd.to_datetime(df["aika"], format='mixed').dt.tz_localize(None)
             df.rename(columns={"lampotila": "Lämpötila", "ilmanpaine": "Ilmanpaine", "sade": "Sademäärä", "tuuli": "Tuuli"}, inplace=True)
@@ -108,7 +114,9 @@ def hae_historia_tietokannasta(paikka_nimi):
             df["Tuulen puuska"] = df["Tuuli"]
         return df
     except Exception as e:
-        st.sidebar.error(f"Tietokantavirhe haussa: {e}")
+        st.error(f"Tietokantavirhe haussa: {e}")
+        with st.expander("Näytä haun tekninen virhe"):
+            st.code(traceback.format_exc())
         return pd.DataFrame()
 
 # 3. KÄYTTÖLIITTYMÄN ALUSTUS
@@ -301,7 +309,8 @@ if yr_json:
 
     # --- HISTORIAN TALLENNUS TIETOKANTAAN ---
     if not df_kansallinen_mennyt.empty:
-        uusia_tallennettu = tallenna_toteutunut_data(df_kansallinen_mennyt[df_kansallinen_mennyt["Aika"] < nyt_dt], valittu_paikka)
+        # Korjattu aikalogiikka ja lisätty aikavyöhykemuuttuja mukaan
+        uusia_tallennettu = tallenna_toteutunut_data(df_kansallinen_mennyt, valittu_paikka, aikavyohyke)
 
     # --- HISTORIAN LUKU PILVIKANNASTA ---
     df_historia = hae_historia_tietokannasta(valittu_paikka)
@@ -440,7 +449,7 @@ if yr_json:
 
             st.altair_chart(alt.layer(tausta_lampo, viiva_lampo).resolve_scale(color='independent'), use_container_width=True)
 
-        # 1. KESKITUULEN SKAALAUS (KORJATTU TUMMEMPI KELTAINEN TAUSTA)
+        # 1. KESKITUULEN SKAALAUS
         maksimi_keski = float(df_suodatettu["Tuuli"].max()) if not df_suodatettu["Tuuli"].empty else 0.0
         keski_katto = max(10.0, math.ceil(maksimi_keski + 2.0))
 
@@ -467,7 +476,7 @@ if yr_json:
         ).properties(height=260).interactive(bind_y=False)
         st.altair_chart(alt.layer(tausta_keski, keski_chart).resolve_scale(color='independent'), use_container_width=True)
 
-        # 2. TUULEN PUUSKIEN SKAALAUS (KORJATTU TUMMEMPI KELTAINEN TAUSTA)
+        # 2. TUULEN PUUSKIEN SKAALAUS
         maksimi_puuska = float(df_suodatettu["Tuulen puuska"].max()) if not df_suodatettu["Tuulen puuska"].empty else 0.0
         puuska_katto = max(15.0, math.ceil(maksimi_puuska + 2.0))
 
